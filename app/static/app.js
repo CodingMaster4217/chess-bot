@@ -25,10 +25,8 @@ $(document).ready(function () {
   const $btnNewGame = $('#btnNewGame');
   const $btnFlipBoard = $('#btnFlipBoard');
 
-  // Determine piece images path (use Wikimedia / Chessboardjs standard CDN with fallback)
-  const pieceTheme = function(piece) {
-    return 'https://chessboardjs.com/img/chesspieces/wikipedia/' + piece + '.png';
-  };
+  // Piece images served directly from local static assets (no external network dependency)
+  const pieceTheme = '/static/img/chesspieces/wikipedia/{piece}.png';
 
   // Board Event Handlers
   function onDragStart(source, piece, position, orientation) {

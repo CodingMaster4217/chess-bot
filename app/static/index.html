@@ -8,8 +8,8 @@
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   
-  <!-- chessboard.js CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <!-- chessboard.js CSS (Local with CDN fallback) -->
+  <link rel="stylesheet" href="/static/vendor/chessboard.min.css">
   
   <!-- Custom CSS -->
   <link rel="stylesheet" href="/static/style.css">
@@ -128,13 +128,10 @@
     </div>
   </main>
 
-  <!-- Scripts: jQuery, chess.js (0.13.4), chessboard.js (1.0.0), app.js -->
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script>window.jQuery || document.write('<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"><\/script>')</script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
-  <script>window.Chess || document.write('<script src="https://cdn.jsdelivr.net/npm/chess.js@0.13.4/chess.min.js"><\/script>')</script>
-  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-  <script>window.Chessboard || document.write('<script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"><\/script>')</script>
+  <!-- Scripts: Vendor dependencies bundled locally for 100% reliability -->
+  <script src="/static/vendor/jquery.min.js"></script>
+  <script src="/static/vendor/chess.min.js"></script>
+  <script src="/static/vendor/chessboard.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
