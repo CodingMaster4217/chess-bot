@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepChess AI - Autonomous Chess Bot</title>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- chessboard.js CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <header>
+    <div class="header-title">
+      <i class="fa-solid fa-chess-knight" style="color: var(--accent-color); font-size: 1.5rem;"></i>
+      <h1>DeepChess AI</h1>
+      <span class="badge">Alpha-Beta &bull; PolyGlot &bull; SQLite TT</span>
+    </div>
+    <div id="connectionStatus" style="font-size: 0.85rem; color: var(--success-color);">
+      <i class="fa-solid fa-circle-check"></i> Connected
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Left: Chessboard & Eval Bar -->
+    <div class="game-section">
+      <div class="eval-container" title="Evaluation Score">
+        <div id="evalLabel" class="eval-label">0.0</div>
+        <div id="evalBarWhite" class="eval-bar-white"></div>
+      </div>
+      <div class="board-wrapper">
+        <div id="board"></div>
+      </div>
+    </div>
+
+    <!-- Right: Sidebar Controls & Analytics -->
+    <div class="sidebar">
+      <!-- Status Card -->
+      <div class="card">
+        <div class="card-title">Game Status</div>
+        <div id="statusBox" class="status-box">
+          <i class="fa-solid fa-circle-play" style="color: var(--accent-color)"></i>
+          <span id="statusText">White to move. Make your move!</span>
+        </div>
+      </div>
+
+      <!-- Controls Card -->
+      <div class="card">
+        <div class="card-title">Bot Configuration</div>
+        <div class="controls-grid">
+          <div class="form-group">
+            <label for="depthSelect">Engine Depth</label>
+            <select id="depthSelect">
+              <option value="4">Depth 4 (Fast)</option>
+              <option value="5">Depth 5 (Balanced)</option>
+              <option value="6" selected>Depth 6 (Default)</option>
+              <option value="7">Depth 7 (Strong)</option>
+              <option value="8">Depth 8 (Deep)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="timeLimitSelect">Max Time / Move</label>
+            <select id="timeLimitSelect">
+              <option value="1.0">1.0s</option>
+              <option value="2.0" selected>2.0s</option>
+              <option value="3.0">3.0s</option>
+              <option value="5.0">5.0s</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="controls-grid">
+          <button id="btnNewGame" class="btn-primary">
+            <i class="fa-solid fa-rotate-right"></i> New Game
+          </button>
+          <button id="btnFlipBoard">
+            <i class="fa-solid fa-repeat"></i> Flip Board
+          </button>
+        </div>
+      </div>
+
+      <!-- Move History Card -->
+      <div class="card">
+        <div class="card-title">
+          <span>Move History</span>
+          <span id="moveCountBadge" style="font-size: 0.8rem; color: var(--text-muted);">0 moves</span>
+        </div>
+        <div class="history-container">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th style="width: 25%;">#</th>
+                <th style="width: 37.5%;">White</th>
+                <th style="width: 37.5%;">Black</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Search Metrics -->
+      <div class="card">
+        <div class="card-title">Search Diagnostics</div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span>Last Move Origin</span>
+            <span id="metricOrigin" class="val">-</span>
+          </div>
+          <div class="metric-item">
+            <span>Search Depth Reached</span>
+            <span id="metricDepth" class="val">-</span>
+          </div>
+          <div class="metric-item">
+            <span>Position Evaluation</span>
+            <span id="metricEval" class="val">0.00</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Scripts: jQuery, chess.js (0.13.4), chessboard.js (1.0.0), app.js -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+

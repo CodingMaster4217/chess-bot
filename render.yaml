@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: chess-bot-service
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
+    disk:
+      name: chess-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: OPENING_BOOK_PATH
+        value: /data/opening_book.bin
+      - key: DB_PATH
+        value: /data/transposition.db
+
