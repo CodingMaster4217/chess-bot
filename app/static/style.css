@@ -121,6 +121,7 @@ header {
 
 #board {
   width: 100%;
+  max-width: 600px;
 }
 
 /* Ensure chessboard.js calculations work with content-box */

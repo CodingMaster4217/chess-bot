@@ -4,6 +4,29 @@
  */
 
 $(document).ready(function () {
+  // Defensive startup check before initialization
+  const missingDependencies = [];
+
+  if (typeof window.jQuery === 'undefined') {
+    missingDependencies.push('jQuery');
+  }
+  if (typeof window.Chess === 'undefined') {
+    missingDependencies.push('chess.js');
+  }
+  if (typeof window.Chessboard === 'undefined') {
+    missingDependencies.push('chessboard.js');
+  }
+
+  if (missingDependencies.length > 0) {
+    console.error(
+      `Cannot initialize chessboard. Missing dependencies: ${missingDependencies.join(', ')}`
+    );
+    $('#board').html(
+      `<p style="color: #ef4444; padding: 2rem; text-align: center;">Cannot initialize chessboard. Missing dependencies: ${missingDependencies.join(', ')}</p>`
+    );
+    return;
+  }
+
   let board = null;
   const game = new Chess();
   let playerColor = 'white';
@@ -25,9 +48,6 @@ $(document).ready(function () {
   const $btnNewGame = $('#btnNewGame');
   const $btnFlipBoard = $('#btnFlipBoard');
 
-  // Piece images served directly from local static assets (no external network dependency)
-  const pieceTheme = '/static/img/chesspieces/wikipedia/{piece}.png';
-
   // Board Event Handlers
   function onDragStart(source, piece, position, orientation) {
     // Prevent piece pickup if game is over
@@ -45,8 +65,9 @@ $(document).ready(function () {
     }
 
     // Only allow dragging player's pieces (unless board flipped for black player)
-    const isPlayerTurn = (game.turn() === 'w' && playerColor === 'white') ||
-                         (game.turn() === 'b' && playerColor === 'black');
+    const isPlayerTurn =
+      (game.turn() === 'w' && playerColor === 'white') ||
+      (game.turn() === 'b' && playerColor === 'black');
     if (!isPlayerTurn) return false;
 
     return true;
@@ -111,7 +132,8 @@ $(document).ready(function () {
       if (data.move) {
         const fromSquare = data.move.substring(0, 2);
         const toSquare = data.move.substring(2, 4);
-        const promotion = data.move.length > 4 ? data.move.substring(4, 5) : undefined;
+        const promotion =
+          data.move.length > 4 ? data.move.substring(4, 5) : undefined;
 
         const botMove = game.move({
           from: fromSquare,
@@ -140,7 +162,9 @@ $(document).ready(function () {
   function setThinkingState(isThinking) {
     if (isThinking) {
       $statusBox.addClass('thinking');
-      $statusText.html('<span class="spinner"></span> Bot is calculating best line...');
+      $statusText.html(
+        '<span class="spinner"></span> Bot is calculating best line...'
+      );
       $btnNewGame.prop('disabled', true);
       $btnFlipBoard.prop('disabled', true);
     } else {
@@ -186,7 +210,9 @@ $(document).ready(function () {
   }
 
   function updateDiagnostics(data) {
-    $metricOrigin.text(data.from_book ? 'PolyGlot Book' : 'Iterative Deepening Search');
+    $metricOrigin.text(
+      data.from_book ? 'PolyGlot Book' : 'Iterative Deepening Search'
+    );
     $metricDepth.text(data.from_book ? 'Book Entry' : `Depth ${data.depth}`);
   }
 
@@ -197,26 +223,30 @@ $(document).ready(function () {
 
   function renderMoveHistory() {
     $historyBody.empty();
-    const totalMoves = moveHistory.length;
-    $moveCountBadge.text(`${totalMoves} ${totalMoves === 1 ? 'move' : 'moves'}`);
 
-    for (let i = 0; i < totalMoves; i += 2) {
+    const totalMoves = moveHistory.length;
+    $moveCountBadge.text(
+      `${totalMoves} ${totalMoves === 1 ? 'move' : 'moves'}`
+    );
+
+    for (let i = 0; i < moveHistory.length; i += 2) {
       const moveNum = Math.floor(i / 2) + 1;
-      const whiteMove = moveHistory[i] ? moveHistory[i].san : '';
-      const blackMove = moveHistory[i + 1] ? moveHistory[i + 1].san : '';
+      const whiteMove = moveHistory[i]?.san || '';
+      const blackMove = moveHistory[i + 1]?.san || '';
 
       const rowHtml = `
-        <tr>
-          <td>${moveNum}.</td>
-          <td><strong>${whiteMove}</strong></td>
-          <td><strong>${blackMove}</strong></td>
-        </tr>
-      `;
+            <tr>
+                <td>${moveNum}.</td>
+                <td>${whiteMove}</td>
+                <td>${blackMove}</td>
+            </tr>
+        `;
+
       $historyBody.append(rowHtml);
     }
 
-    // Scroll to bottom
     const historyContainer = document.querySelector('.history-container');
+
     if (historyContainer) {
       historyContainer.scrollTop = historyContainer.scrollHeight;
     }
@@ -254,24 +284,20 @@ $(document).ready(function () {
     playerColor = board.orientation();
 
     // If flipped and it's bot's turn, trigger move
-    const isBotTurn = (game.turn() === 'w' && playerColor === 'black') ||
-                      (game.turn() === 'b' && playerColor === 'white');
+    const isBotTurn =
+      (game.turn() === 'w' && playerColor === 'black') ||
+      (game.turn() === 'b' && playerColor === 'white');
     if (isBotTurn) {
       window.setTimeout(triggerEngineMove, 200);
     }
   });
 
-  // Initialize Chessboard.js with error safety
-  if (typeof Chessboard === 'undefined') {
-    console.error('Chessboard.js library failed to load from CDNs.');
-    $('#board').html('<p style="color: #ef4444; padding: 2rem; text-align: center;">Unable to load Chessboard.js. Please check your internet connection and refresh.</p>');
-    return;
-  }
-
+  // Initialize Chessboard.js
   const config = {
     draggable: true,
     position: 'start',
-    pieceTheme: pieceTheme,
+    orientation: playerColor,
+    pieceTheme: '/static/img/chesspieces/wikipedia/{piece}.png',
     onDragStart: onDragStart,
     onDrop: onDrop,
     onSnapEnd: onSnapEnd
@@ -280,7 +306,7 @@ $(document).ready(function () {
   try {
     board = Chessboard('board', config);
     // Explicit initial resize to guarantee board renders with correct pixel width
-    setTimeout(function() {
+    setTimeout(function () {
       if (board && board.resize) board.resize();
     }, 100);
     updateStatus();
@@ -289,8 +315,7 @@ $(document).ready(function () {
   }
 
   // Resize handler for responsiveness
-  $(window).resize(function() {
+  $(window).resize(function () {
     if (board && board.resize) board.resize();
   });
 });
-
