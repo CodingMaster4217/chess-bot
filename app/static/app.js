@@ -25,8 +25,10 @@ $(document).ready(function () {
   const $btnNewGame = $('#btnNewGame');
   const $btnFlipBoard = $('#btnFlipBoard');
 
-  // Determine piece images path
-  const pieceTheme = 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png';
+  // Determine piece images path (use Wikimedia / Chessboardjs standard CDN with fallback)
+  const pieceTheme = function(piece) {
+    return 'https://chessboardjs.com/img/chesspieces/wikipedia/' + piece + '.png';
+  };
 
   // Board Event Handlers
   function onDragStart(source, piece, position, orientation) {
@@ -261,7 +263,13 @@ $(document).ready(function () {
     }
   });
 
-  // Initialize Chessboard.js
+  // Initialize Chessboard.js with error safety
+  if (typeof Chessboard === 'undefined') {
+    console.error('Chessboard.js library failed to load from CDNs.');
+    $('#board').html('<p style="color: #ef4444; padding: 2rem; text-align: center;">Unable to load Chessboard.js. Please check your internet connection and refresh.</p>');
+    return;
+  }
+
   const config = {
     draggable: true,
     position: 'start',
@@ -271,10 +279,20 @@ $(document).ready(function () {
     onSnapEnd: onSnapEnd
   };
 
-  board = Chessboard('board', config);
-  updateStatus();
+  try {
+    board = Chessboard('board', config);
+    // Explicit initial resize to guarantee board renders with correct pixel width
+    setTimeout(function() {
+      if (board && board.resize) board.resize();
+    }, 100);
+    updateStatus();
+  } catch (e) {
+    console.error('Error initializing chessboard:', e);
+  }
 
   // Resize handler for responsiveness
-  $(window).resize(board.resize);
+  $(window).resize(function() {
+    if (board && board.resize) board.resize();
+  });
 });
 

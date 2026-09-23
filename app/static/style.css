@@ -113,6 +113,7 @@ header {
 
 .board-wrapper {
   width: 520px;
+  max-width: 100%;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
   border-radius: 6px;
   overflow: hidden;
@@ -120,6 +121,19 @@ header {
 
 #board {
   width: 100%;
+}
+
+/* Ensure chessboard.js calculations work with content-box */
+#board,
+#board *,
+.chessboard-63f37,
+.chessboard-63f37 * {
+  box-sizing: content-box;
+}
+
+#board img {
+  box-sizing: content-box;
+  display: block;
 }
 
 /* Sidebar & Controls */
