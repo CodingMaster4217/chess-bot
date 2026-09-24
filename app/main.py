@@ -13,7 +13,7 @@ import chess
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.memory import TranspositionTable
 from app.book import OpeningBook
@@ -252,16 +252,33 @@ def reset_game():
 
 
 # Mount static files directory
+#
+# Cache policy: static assets are served with `no-cache`, which lets browsers
+# STORE the files but REVALIDATE with the server on every load (ETag/Last-
+# Modified 304s still apply). Without this, browsers may apply heuristic
+# caching and serve a stale app.js after a deploy, which leaves buttons and
+# board interactions silently dead (the old script knows nothing about the
+# new HTML elements).
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.middleware("http")
+    async def static_cache_headers(request, call_next):
+        response: Response = await call_next(request)
+        if request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @app.get("/")
 def serve_index():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path)
+        # Revalidate on every load so users never run a stale page against a
+        # freshly deployed backend.
+        headers = {"Cache-Control": "no-cache"}
+        return FileResponse(index_path, headers=headers)
     return {"message": "Chess Bot API is running. Static frontend not found."}
 
 
