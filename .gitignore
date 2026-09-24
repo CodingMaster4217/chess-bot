@@ -33,6 +33,11 @@ wheels/
 .coverage
 htmlcov/
 
+# Node (local browser-test harnesses only; the app itself has no Node deps)
+node_modules/
+package-lock.json
+package.json
+
 # Local database temp files (keep data/ directory and .gitkeep)
 data/*.db-shm
 data/*.db-wal

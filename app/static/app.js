@@ -2,8 +2,15 @@
  * DeepChess client-side application.
  * Connects chessboard.js (v1.0.0) and chess.js (0.10.x) to the FastAPI backend.
  *
- * Live engine analysis is never shown during an active game.
- * Engine data (eval/depth/book) is stored only for post-game review.
+ * Architecture notes:
+ * - All UI state lives in a single `state` object; every state transition
+ *   goes through helper functions (finishGame, enterReview, exitReview,
+ *   resetGameState) and ends with updateControls().
+ * - Drag-and-drop and click-to-move share one move path: tryPlayerMove().
+ * - Board listeners are namespaced and bound idempotently (off then on),
+ *   so re-initialization can never create duplicate handlers.
+ * - Live engine analysis is never rendered during an active game; engine
+ *   data is stored for post-game review only.
  */
 
 $(document).ready(function () {
@@ -31,7 +38,7 @@ $(document).ready(function () {
     const boardElement = document.getElementById('board');
 
     if (boardElement) {
-      // Static application-owned message; contains no untrusted input.
+      // Static, application-owned message; contains no untrusted input.
       boardElement.innerHTML =
         '<p style="color: #ef4444; padding: 2rem; text-align: center;"></p>';
       boardElement.querySelector('p').textContent = message;
@@ -41,7 +48,7 @@ $(document).ready(function () {
   }
 
   // ------------------------------------------------------------------
-  // DOM references
+  // Centralized DOM references
   // ------------------------------------------------------------------
   const $statusText = $('#statusText');
   const $statusBox = $('#statusBox');
@@ -72,115 +79,230 @@ $(document).ready(function () {
   const boardElement = document.getElementById('board');
 
   // ------------------------------------------------------------------
-  // Game state
+  // Centralized state model
   // ------------------------------------------------------------------
-  let board = null;
-  const game = new Chess();
-  let isEngineThinking = false;
-  let moveHistory = [];
+  const state = {
+    engineThinking: false,       // an /api/move request is in flight
+    gameFinished: false,         // application-level result (includes resignation)
+    finishReason: null,          // 'checkmate' | 'draw' | 'resignation' | null
+    reviewMode: false,           // read-only review navigation active
+    currentReviewIndex: 0,       // 0 = start position, N = after ply N
+    selectedSquare: null,        // click-to-move selection
+    showLegalMoves: true         // user preference (persisted)
+  };
 
-  // Application-level result flag. chess.js game_over() cannot know about a
-  // resignation, so this flag is required to gate review and input.
-  let gameHasEnded = false;
-  let endReason = null; // 'checkmate' | 'draw' | 'resignation'
-
-  // Review state. reviewIndex 0 = initial position, N = position after ply N.
-  let reviewMode = false;
-  let reviewIndex = 0;
-
-  // Click-to-move selection state.
-  let selectedSquare = null;
-
-  // Set while a drag-driven move is being processed so the click handler can
-  // ignore the mouseup/click that follows a completed drag.
+  // Set while a drag-driven move is processed so the click handler ignores
+  // the mouseup/click event that browsers fire after a completed drag.
   let suppressClickUntil = 0;
 
-  // Legal-move display preference (default: enabled when no saved value).
+  // Legal-move display preference persistence.
   const LEGAL_MOVES_STORAGE_KEY = 'deepchess.showLegalMoves';
-  let showLegalMovesPref = true;
 
   try {
     const stored = window.localStorage.getItem(LEGAL_MOVES_STORAGE_KEY);
     if (stored === 'true') {
-      showLegalMovesPref = true;
+      state.showLegalMoves = true;
     } else if (stored === 'false') {
-      showLegalMovesPref = false;
+      state.showLegalMoves = false;
     }
   } catch (error) {
     // localStorage unavailable (private mode etc.) - keep the default.
   }
 
-  $showLegalMoves.prop('checked', showLegalMovesPref);
+  $showLegalMoves.prop('checked', state.showLegalMoves);
 
   // ------------------------------------------------------------------
-  // Game record (for post-game review)
+  // Game history (for post-game review)
   // ------------------------------------------------------------------
-  // reviewRecord.initialFen : starting FEN of the game
-  // reviewRecord.positions[i] : { fen, eval?, depth?, fromBook? } for
+  const game = new Chess();
+  let moveHistory = [];
+
+  // gameHistory.initialFen : starting FEN of the game
+  // gameHistory.positions[i] : { fen, eval?, depth?, fromBook? } for
   //   i = 0 (start) .. plyCount. eval/depth/fromBook describe the engine
   //   search performed AT that position (present only when the engine
   //   searched or answered from book there).
-  // reviewRecord.moves[i] : metadata for the move that produced
+  // gameHistory.moves[i] : metadata for the move that produced
   //   positions[i + 1]:
   //   { san, uci, from, to, promotion, color, ply, moveNumber, fenAfter }
   // UCI is always built from from/to/promotion, never inferred from SAN.
-  const reviewRecord = {
-    initialFen: game.fen(),
-    positions: [{ fen: game.fen() }],
-    moves: []
-  };
+  const gameHistory = createEmptyGameHistory();
 
-  // Post-game analysis caches and request tracking (checkpoint 3 wires these
-  // to the /api/analyze endpoint).
-  const analysisCache = new Map(); // fen -> { evaluation, depth, bestMove, fromBook }
+  // Post-game analysis cache: fen -> { evaluation, depth, bestMove, fromBook }
+  const reviewAnalysisCache = new Map();
   let analysisRequestToken = 0;
   let analysisAbortController = null;
 
+  function createEmptyGameHistory() {
+    return {
+      initialFen: game.fen(),
+      positions: [{ fen: game.fen() }],
+      moves: []
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // Centralized state queries and transitions
+  // ------------------------------------------------------------------
+
   /**
-   * Returns whether the current chess.js position is over.
+   * True only when the human may currently make a move (drag or click).
    */
-  function isGameOver() {
-    return game.game_over();
+  function canHumanMove() {
+    return (
+      !state.engineThinking &&
+      !state.gameFinished &&
+      !state.reviewMode &&
+      !game.game_over() &&
+      game.turn() === 'w' // the human always controls White
+    );
   }
 
   /**
-   * True when the local game can still be played (includes resignation,
-   * which chess.js does not know about).
+   * Records an application-level game result. chess.js cannot know about
+   * resignations, so this is the single authority for "game over".
    */
-  function isActiveGame() {
-    return !gameHasEnded && !isGameOver();
+  function finishGame(reason) {
+    if (state.gameFinished) {
+      return;
+    }
+
+    state.gameFinished = true;
+    state.finishReason = reason;
+
+    clearSelectionAndHighlights();
+    updateStatus();
+    updateControls();
   }
 
   /**
-   * True when a human move attempt (drag or click) may be processed.
+   * Detects chess.js-native endings and routes them through finishGame.
    */
-  function canAcceptPlayerMove() {
-    if (!isActiveGame()) {
-      return false;
+  function syncFinishFromBoard() {
+    if (state.gameFinished) {
+      return;
     }
 
-    if (isEngineThinking) {
-      return false;
+    if (game.in_checkmate()) {
+      finishGame('checkmate');
+    } else if (game.in_draw()) {
+      finishGame('draw');
     }
-
-    if (reviewMode) {
-      return false;
-    }
-
-    // The human always controls White.
-    if (game.turn() !== 'w') {
-      return false;
-    }
-
-    return true;
   }
 
   /**
-   * True when clicking on a piece is allowed to start a selection.
-   * (Same conditions as moving, but used before a square is chosen.)
+   * Enters review mode at the given index. The completed chess.js game is
+   * never modified; review navigation only changes the displayed FEN.
    */
-  function canSelectPieces() {
-    return canAcceptPlayerMove();
+  function enterReview(index) {
+    if (!state.gameFinished || state.reviewMode) {
+      return;
+    }
+
+    state.reviewMode = true;
+    state.currentReviewIndex = clampReviewIndex(index);
+
+    clearSelectionAndHighlights();
+
+    $reviewControls.removeAttr('hidden');
+    $reviewAnalysisCard.removeAttr('hidden');
+
+    renderMoveHistory();
+    showReviewPosition(state.currentReviewIndex);
+  }
+
+  /**
+   * Exits review mode and returns to the final completed position
+   * (not a new active game).
+   */
+  function exitReview() {
+    if (!state.reviewMode) {
+      return;
+    }
+
+    state.reviewMode = false;
+    cancelPendingAnalysis();
+
+    $reviewControls.attr('hidden', '');
+    $reviewAnalysisCard.attr('hidden', '');
+    $reviewAnalysisStatus.empty();
+
+    clearSelectionAndHighlights();
+    applyPositionToBoard();
+    renderMoveHistory();
+    updateStatus();
+    updateControls();
+  }
+
+  /**
+   * Clears all game, history, and review state for a fresh game.
+   */
+  function resetGameState() {
+    cancelPendingAnalysis();
+
+    game.reset();
+    moveHistory = [];
+
+    state.gameFinished = false;
+    state.finishReason = null;
+    state.reviewMode = false;
+    state.currentReviewIndex = 0;
+    state.selectedSquare = null;
+
+    gameHistory.initialFen = game.fen();
+    gameHistory.positions = [{ fen: game.fen() }];
+    gameHistory.moves = [];
+    reviewAnalysisCache.clear();
+
+    if (board) {
+      board.start();
+    }
+
+    $reviewControls.attr('hidden', '');
+    $reviewAnalysisCard.attr('hidden', '');
+    $reviewAnalysisStatus.empty();
+
+    renderMoveHistory();
+    updateStatus();
+    updateControls();
+  }
+
+  /**
+   * Single source of truth for every control's enabled/disabled state.
+   * Called after every relevant state transition.
+   */
+  function updateControls() {
+    const canMove = canHumanMove();
+    const maxIndex = gameHistory.moves.length;
+    const atStart = state.currentReviewIndex <= 0;
+    const atEnd = state.currentReviewIndex >= maxIndex;
+    const inReview = state.reviewMode;
+
+    $btnNewGame.prop('disabled', state.engineThinking);
+    $btnFlipBoard.prop('disabled', state.engineThinking);
+    $btnResign.prop('disabled', !canMove);
+    $btnReviewGame.prop('disabled', !state.gameFinished || state.reviewMode);
+
+    $btnReviewFirst.prop('disabled', !inReview || atStart);
+    $btnReviewPrev.prop('disabled', !inReview || atStart);
+    $btnReviewMovePrev.prop('disabled', !inReview || atStart);
+    $btnReviewNext.prop('disabled', !inReview || atEnd);
+    $btnReviewLast.prop('disabled', !inReview || atEnd);
+    $btnReviewMoveNext.prop('disabled', !inReview || atEnd);
+  }
+
+  function clampReviewIndex(index) {
+    const maxIndex = gameHistory.moves.length;
+
+    if (index < 0) {
+      return 0;
+    }
+
+    if (index > maxIndex) {
+      return maxIndex;
+    }
+
+    return index;
   }
 
   // ------------------------------------------------------------------
@@ -191,13 +313,9 @@ $(document).ready(function () {
    * Validates and applies a player move from any input source.
    * Returns the recorded move object on success, or null on failure
    * (the position is unchanged in that case).
-   *
-   * Guards: game over (incl. resignation), engine thinking, review mode,
-   * not the human's turn. Exactly one engine request is scheduled per
-   * successful move.
    */
   function tryPlayerMove(fromSquare, toSquare, promotion) {
-    if (!canAcceptPlayerMove()) {
+    if (!canHumanMove()) {
       return null;
     }
 
@@ -211,15 +329,16 @@ $(document).ready(function () {
     });
 
     if (move === null) {
-      // Illegal move: position unchanged, caller decides UI (snapback etc.)
+      // Illegal move: position unchanged; caller decides UI (snapback etc.)
       return null;
     }
 
-    clearSelection();
+    clearSelectionAndHighlights();
 
     recordMove(move);
-    checkGameEnd();
+    syncFinishFromBoard();
     updateStatus();
+    updateControls();
 
     window.setTimeout(triggerEngineMove, 150);
 
@@ -231,12 +350,11 @@ $(document).ready(function () {
   // ------------------------------------------------------------------
 
   /**
-   * Controls whether a piece may be picked up for dragging.
-   * Returning false also prevents chessboard.js from entering drag mode,
-   * which keeps click-to-move and drag-and-drop from interfering.
+   * Controls whether a piece may be picked up for dragging. Returning false
+   * also prevents chessboard.js from entering drag mode at all.
    */
   function onDragStart(source, piece) {
-    if (!canAcceptPlayerMove()) {
+    if (!canHumanMove()) {
       return false;
     }
 
@@ -244,9 +362,9 @@ $(document).ready(function () {
       return false;
     }
 
-    // A drag of the currently selected piece clears click-selection.
-    if (selectedSquare && selectedSquare !== source) {
-      clearSelection();
+    // Dragging a different piece than the one selected clears selection.
+    if (state.selectedSquare && state.selectedSquare !== source) {
+      clearSelectionAndHighlights();
     }
 
     return true;
@@ -259,7 +377,7 @@ $(document).ready(function () {
   function onDrop(source, target) {
     suppressClickUntil = Date.now() + 450;
 
-    if (!canAcceptPlayerMove()) {
+    if (!canHumanMove()) {
       return 'snapback';
     }
 
@@ -282,13 +400,13 @@ $(document).ready(function () {
   }
 
   // ------------------------------------------------------------------
-  // Click-to-move (delegated, single listener)
+  // Click-to-move (single, idempotent, delegated listener)
   // ------------------------------------------------------------------
 
   /**
    * Extracts a square name from a chessboard.js square element.
-   * Uses the data-square attribute first and falls back to scanning the
-   * className for a square-<name> token, so class order is irrelevant.
+   * Prefers the data-square attribute, then scans class tokens against a
+   * strict pattern, so class order is irrelevant.
    */
   function extractSquare(element) {
     if (!element || element.nodeType !== 1) {
@@ -296,46 +414,81 @@ $(document).ready(function () {
     }
 
     const attr = element.getAttribute('data-square');
+
     if (attr && /^[a-h][1-8]$/.test(attr)) {
       return attr;
     }
 
-    const match = /\bsquare-([a-h][1-8])\b/.exec(element.className || '');
-    return match ? match[1] : null;
+    const className =
+      typeof element.className === 'string' ? element.className : '';
+    const tokens = className.split(/\s+/);
+
+    for (let i = 0; i < tokens.length; i++) {
+      const match = /^square-([a-h][1-8])$/.exec(tokens[i]);
+
+      if (match) {
+        return match[1];
+      }
+    }
+
+    return null;
   }
 
   /**
-   * Handles clicks on board squares: select / reselect / deselect / move.
+   * Handles clicks anywhere inside #board. The actual click target may be
+   * a piece image, a notation div, or the square itself, so the square is
+   * resolved with closest('.square-55d63').
    */
-  function onBoardSquareClick(square) {
-    if (Date.now() < suppressClickUntil) {
-      return; // Part of a drag gesture that chessboard.js already handled.
-    }
+  function handleSquareClick(event) {
+    const squareEl =
+      event.target && event.target.closest
+        ? event.target.closest('.square-55d63')
+        : null;
 
-    if (!canSelectPieces()) {
+    if (!squareEl) {
       return;
     }
 
+    const square = extractSquare(squareEl);
+
+    if (!square) {
+      return;
+    }
+
+    if (Date.now() < suppressClickUntil) {
+      return; // Part of a drag gesture chessboard.js already handled.
+    }
+
+    if (!canHumanMove()) {
+      return;
+    }
+
+    onSquareActivated(square);
+  }
+
+  /**
+   * Selection / move logic for an activated square.
+   */
+  function onSquareActivated(square) {
     const piece = game.get(square);
 
-    if (selectedSquare === square) {
+    if (state.selectedSquare === square) {
       // Clicking the selected square again deselects it.
-      clearSelection();
+      clearSelectionAndHighlights();
       return;
     }
 
-    if (selectedSquare) {
-      const legalTargets = getLegalTargets(selectedSquare);
+    if (state.selectedSquare) {
+      const legalTargets = getLegalTargets(state.selectedSquare);
 
       if (legalTargets.indexOf(square) !== -1) {
-        // Legal destination: move. The board position is updated by
-        // triggerEngineMove's caller via applyPositionToBoard().
-        const move = tryPlayerMove(selectedSquare, square, 'q');
+        // Legal destination: move.
+        const move = tryPlayerMove(state.selectedSquare, square, 'q');
 
         if (move !== null) {
           applyPositionToBoard();
         } else {
-          clearSelection();
+          clearSelectionAndHighlights();
         }
 
         return;
@@ -347,8 +500,7 @@ $(document).ready(function () {
         return;
       }
 
-      // Illegal destination: does not change the game state. Keep the
-      // selection so the user can pick another square.
+      // Illegal destination: game state unchanged; keep the selection.
       return;
     }
 
@@ -362,7 +514,7 @@ $(document).ready(function () {
    * Legality is computed by chess.js only.
    */
   function getLegalTargets(square) {
-    if (!square || !isActiveGame() || game.turn() !== 'w') {
+    if (!square || !canHumanMove()) {
       return [];
     }
 
@@ -374,20 +526,25 @@ $(document).ready(function () {
   }
 
   /**
-   * Selects a square and (optionally) shows legal destinations.
+   * Applies selection + legal-destination highlight classes for the
+   * current selection.
    */
-  function selectSquare(square) {
-    clearSelection();
-    selectedSquare = square;
-
-    const $square = $(boardElement).find('.square-' + square);
-    $square.addClass('sel-square');
-
-    if (!showLegalMovesPref) {
+  function renderSelection() {
+    if (!state.selectedSquare) {
       return;
     }
 
-    const moves = game.moves({ square: square, verbose: true });
+    $(boardElement).find('.square-' + state.selectedSquare)
+      .addClass('sel-square');
+
+    if (!state.showLegalMoves) {
+      return;
+    }
+
+    const moves = game.moves({
+      square: state.selectedSquare,
+      verbose: true
+    });
 
     moves.forEach(function (move) {
       const isCapture =
@@ -400,10 +557,19 @@ $(document).ready(function () {
   }
 
   /**
-   * Removes the selection and all legal-move highlight classes.
+   * Selects a square and (optionally) shows legal destinations.
    */
-  function clearSelection() {
-    selectedSquare = null;
+  function selectSquare(square) {
+    clearSelectionAndHighlights();
+    state.selectedSquare = square;
+    renderSelection();
+  }
+
+  /**
+   * Removes the selection and every selection/highlight class.
+   */
+  function clearSelectionAndHighlights() {
+    state.selectedSquare = null;
 
     $(boardElement).find(
       '.sel-square, .legal-move-hint, .legal-capture-hint'
@@ -414,7 +580,7 @@ $(document).ready(function () {
    * Deselects when clicking anywhere outside the board.
    */
   function onDocumentClick(event) {
-    if (!selectedSquare) {
+    if (!state.selectedSquare) {
       return;
     }
 
@@ -422,26 +588,21 @@ $(document).ready(function () {
       return;
     }
 
-    clearSelection();
+    clearSelectionAndHighlights();
   }
 
-  // Bind once. chessboard.js rebuilds square elements internally but never
-  // replaces #board itself, so this delegated listener survives resizes,
-  // board.start() and position updates without ever being re-created.
-  $(boardElement).on(
-    'click.deepchess',
-    '.square-55d63',
-    function (event) {
-      const square = extractSquare(this);
+  // Bind exactly once, idempotently. .off() removes any previous namespaced
+  // handler before .on() adds it, so double initialization is impossible.
+  // The listener lives on the stable #board container (never recreated by
+  // chessboard.js resize/position/flip) and resolves the real target with
+  // closest(), so clicks on piece images work too.
+  $('#board')
+    .off('click.chessMove')
+    .on('click.chessMove', handleSquareClick);
 
-      if (square) {
-        event.preventDefault();
-        onBoardSquareClick(square);
-      }
-    }
-  );
-
-  $(document).on('click.deepchess', onDocumentClick);
+  $(document)
+    .off('click.chessDeselect')
+    .on('click.chessDeselect', onDocumentClick);
 
   // ------------------------------------------------------------------
   // Engine move
@@ -451,18 +612,19 @@ $(document).ready(function () {
    * Requests and applies the engine's reply.
    */
   async function triggerEngineMove() {
-    if (!isActiveGame()) {
+    if (state.gameFinished || game.game_over()) {
       updateStatus();
       return;
     }
 
-    if (isEngineThinking) {
+    if (state.engineThinking) {
       return; // Prevent duplicate engine requests.
     }
 
-    isEngineThinking = true;
+    state.engineThinking = true;
     setThinkingState(true);
-    clearSelection();
+    clearSelectionAndHighlights();
+    updateControls();
 
     const depth = parseInt($depthSelect.val(), 10);
     const timeLimit = parseFloat($timeLimitSelect.val());
@@ -500,7 +662,7 @@ $(document).ready(function () {
       const data = await response.json();
 
       if (data.is_game_over) {
-        checkGameEnd();
+        syncFinishFromBoard();
         updateStatus();
         return;
       }
@@ -529,14 +691,13 @@ $(document).ready(function () {
       }
 
       // The /api/move response describes the position the engine searched
-      // (the position after the player's move), so attach the data to that
-      // position record rather than to the move the engine produced.
-      // Capture the index BEFORE recordMove pushes the engine-result position.
-      const searchedIndex = reviewRecord.positions.length - 1;
+      // (the position after the player's move). Capture the index BEFORE
+      // recordMove pushes the engine-result position.
+      const searchedIndex = gameHistory.positions.length - 1;
 
       recordMove(botMove);
 
-      const searchedPosition = reviewRecord.positions[searchedIndex];
+      const searchedPosition = gameHistory.positions[searchedIndex];
 
       if (searchedPosition) {
         searchedPosition.eval = data.eval;
@@ -545,16 +706,17 @@ $(document).ready(function () {
       }
 
       applyPositionToBoard();
-      checkGameEnd();
+      syncFinishFromBoard();
     } catch (error) {
       console.error('Failed to get bot move:', error);
       $statusText.text(
         'Could not get a move from the chess server. Please start a new game or try again.'
       );
     } finally {
-      isEngineThinking = false;
+      state.engineThinking = false;
       setThinkingState(false);
       updateStatus();
+      updateControls();
     }
   }
 
@@ -568,52 +730,29 @@ $(document).ready(function () {
   }
 
   /**
-   * Updates the UI while the engine is calculating.
+   * Updates the status UI while the engine is calculating.
    */
   function setThinkingState(isThinking) {
     if (isThinking) {
       $statusBox.addClass('thinking');
       $statusText.text('Bot is calculating the best move...');
-      $btnNewGame.prop('disabled', true);
-      $btnFlipBoard.prop('disabled', true);
-      $btnResign.prop('disabled', true);
     } else {
       $statusBox.removeClass('thinking');
-      $btnNewGame.prop('disabled', false);
-      $btnFlipBoard.prop('disabled', false);
-      updateControlStates();
     }
-  }
-
-  /**
-   * Detects checkmate / draw and finalizes the game record.
-   */
-  function checkGameEnd() {
-    if (gameHasEnded) {
-      return;
-    }
-
-    if (game.in_checkmate()) {
-      gameHasEnded = true;
-      endReason = 'checkmate';
-    } else if (game.in_draw()) {
-      gameHasEnded = true;
-      endReason = 'draw';
-    }
+    // Enable/disable states are owned exclusively by updateControls().
   }
 
   /**
    * Displays the current game state. No engine analysis is ever shown here.
    */
   function updateStatus() {
-    if (isEngineThinking) {
+    if (state.engineThinking) {
       return;
     }
 
-    if (gameHasEnded && endReason === 'resignation') {
+    if (state.gameFinished && state.finishReason === 'resignation') {
       $statusText.text('Game Over: You resigned. Black wins.');
       $statusBox.addClass('game-over');
-      updateControlStates();
       return;
     }
 
@@ -638,37 +777,10 @@ $(document).ready(function () {
     }
 
     $statusText.text(status);
-    updateControlStates();
-  }
-
-  /**
-   * Enables/disables controls according to the current state.
-   */
-  function updateControlStates() {
-    const active = isActiveGame();
-
-    $btnResign.prop('disabled', !active || isEngineThinking || reviewMode);
-    $btnReviewGame.prop('disabled', !gameHasEnded || reviewMode);
-
-    $btnReviewPrev.prop('disabled', !reviewMode || reviewIndex <= 0);
-    $btnReviewFirst.prop('disabled', !reviewMode || reviewIndex <= 0);
-    $btnReviewNext.prop(
-      'disabled',
-      !reviewMode || reviewIndex >= reviewRecord.moves.length
-    );
-    $btnReviewLast.prop(
-      'disabled',
-      !reviewMode || reviewIndex >= reviewRecord.moves.length
-    );
-    $btnReviewMovePrev.prop('disabled', !reviewMode || reviewIndex <= 0);
-    $btnReviewMoveNext.prop(
-      'disabled',
-      !reviewMode || reviewIndex >= reviewRecord.moves.length
-    );
   }
 
   // ------------------------------------------------------------------
-  // Game record + move history rendering
+  // Game history + move history rendering
   // ------------------------------------------------------------------
 
   /**
@@ -682,19 +794,19 @@ $(document).ready(function () {
       move.to +
       (move.promotion ? move.promotion : '');
 
-    reviewRecord.moves.push({
+    gameHistory.moves.push({
       san: move.san,
       uci: uci,
       from: move.from,
       to: move.to,
       promotion: move.promotion || null,
       color: move.color,
-      ply: reviewRecord.moves.length + 1,
-      moveNumber: Math.floor(reviewRecord.moves.length / 2) + 1,
+      ply: gameHistory.moves.length + 1,
+      moveNumber: Math.floor(gameHistory.moves.length / 2) + 1,
       fenAfter: game.fen()
     });
 
-    reviewRecord.positions.push({ fen: game.fen() });
+    gameHistory.positions.push({ fen: game.fen() });
 
     renderMoveHistory();
   }
@@ -741,21 +853,21 @@ $(document).ready(function () {
    * a button so it is keyboard accessible.
    */
   function buildHistoryCell(plyIndex) {
-    const record = reviewRecord.moves[plyIndex];
+    const record = gameHistory.moves[plyIndex];
     const $cell = $('<td>');
 
     if (!record) {
       return $cell;
     }
 
-    if (reviewMode && gameHasEnded) {
+    if (state.reviewMode && state.gameFinished) {
       const $button = $('<button>', {
         type: 'button',
         class: 'history-move-btn',
         'aria-label': `Review position after ${record.color === 'w' ? 'White' : 'Black'} plays ${record.san}`
       }).text(record.san);
 
-      if (reviewIndex === plyIndex + 1) {
+      if (state.currentReviewIndex === plyIndex + 1) {
         $button.addClass('active');
       }
 
@@ -772,83 +884,38 @@ $(document).ready(function () {
   }
 
   // ------------------------------------------------------------------
-  // Review mode
+  // Review navigation and analysis
   // ------------------------------------------------------------------
-
-  /**
-   * Enters review mode. The completed chess.js game is never modified;
-   * review navigation only changes the displayed FEN.
-   */
-  function enterReviewMode() {
-    if (!gameHasEnded || reviewMode) {
-      return;
-    }
-
-    reviewMode = true;
-    reviewIndex = reviewRecord.moves.length; // Final position.
-    clearSelection();
-
-    $reviewControls.removeAttr('hidden');
-    $reviewAnalysisCard.removeAttr('hidden');
-
-    renderMoveHistory();
-    showReviewPosition(reviewIndex);
-  }
-
-  /**
-   * Exits review mode and returns to the final completed position
-   * (not a new active game).
-   */
-  function exitReviewMode() {
-    if (!reviewMode) {
-      return;
-    }
-
-    reviewMode = false;
-    cancelPendingAnalysis();
-
-    $reviewControls.attr('hidden', '');
-    $reviewAnalysisCard.attr('hidden', '');
-    $reviewAnalysisStatus.empty();
-
-    clearSelection();
-    applyPositionToBoard();
-    renderMoveHistory();
-    updateStatus();
-  }
 
   /**
    * Displays a stored position by index (0 = start, N = after ply N).
    * Never calls game.move() / game.undo().
    */
   function showReviewPosition(index) {
-    const maxIndex = reviewRecord.moves.length;
+    state.currentReviewIndex = clampReviewIndex(index);
 
-    if (index < 0) {
-      index = 0;
-    }
+    const position = gameHistory.positions[state.currentReviewIndex];
 
-    if (index > maxIndex) {
-      index = maxIndex;
-    }
-
-    reviewIndex = index;
-
-    const position = reviewRecord.positions[index];
     if (position && board) {
       board.position(position.fen, false);
     }
 
     // Position label: "Start" or "12. Nf3" / "12... Nf6" style.
-    if (index === 0) {
+    if (state.currentReviewIndex === 0) {
       $reviewPositionLabel.text('Start');
     } else {
-      const move = reviewRecord.moves[index - 1];
-      const prefix = move.color === 'w' ? `${move.moveNumber}.` : `${move.moveNumber}...`;
-      $reviewPositionLabel.text(`${prefix} ${move.san}  (ply ${index}/${maxIndex})`);
+      const move = gameHistory.moves[state.currentReviewIndex - 1];
+      const prefix =
+        move.color === 'w'
+          ? `${move.moveNumber}.`
+          : `${move.moveNumber}...`;
+
+      $reviewPositionLabel.text(
+        `${prefix} ${move.san}  (ply ${state.currentReviewIndex}/${gameHistory.moves.length})`
+      );
     }
 
-    updateControlStates();
+    updateControls();
     renderMoveHistory();
     updateReviewAnalysis();
   }
@@ -877,13 +944,13 @@ $(document).ready(function () {
     $reviewBook.text('-');
     $reviewAnalysisStatus.empty();
 
-    if (reviewIndex === 0) {
+    if (state.currentReviewIndex === 0) {
       $reviewEval.text('0.00'); // The starting position is balanced.
       return;
     }
 
-    const move = reviewRecord.moves[reviewIndex - 1];
-    const position = reviewRecord.positions[reviewIndex];
+    const move = gameHistory.moves[state.currentReviewIndex - 1];
+    const position = gameHistory.positions[state.currentReviewIndex];
 
     if (!move || !position) {
       return;
@@ -972,8 +1039,8 @@ $(document).ready(function () {
    * late reply can never overwrite the UI of a different selected position.
    */
   async function requestAnalysis(fen) {
-    if (analysisCache.has(fen)) {
-      applyAnalysisResult(analysisCache.get(fen), fen);
+    if (reviewAnalysisCache.has(fen)) {
+      applyAnalysisResult(reviewAnalysisCache.get(fen), fen);
       return;
     }
 
@@ -1010,7 +1077,7 @@ $(document).ready(function () {
         fromBook: Boolean(data.from_book)
       };
 
-      analysisCache.set(fen, result);
+      reviewAnalysisCache.set(fen, result);
       applyAnalysisResult(result, fen);
     } catch (error) {
       if (error && error.name === 'AbortError') {
@@ -1020,7 +1087,7 @@ $(document).ready(function () {
       console.error('Analysis request failed:', error);
 
       if (token === analysisRequestToken) {
-        const current = reviewRecord.positions[reviewIndex];
+        const current = gameHistory.positions[state.currentReviewIndex];
 
         // Only show the error if the failed position is still displayed.
         if (current && current.fen === fen) {
@@ -1037,15 +1104,15 @@ $(document).ready(function () {
   }
 
   /**
-   * Applies an analysis result to the UI if this is still the newest request
-   * and the displayed position has not changed.
+   * Applies an analysis result to the UI if the displayed position still
+   * matches the analyzed one.
    */
   function applyAnalysisResult(result, fen) {
-    if (!reviewMode) {
+    if (!state.reviewMode) {
       return;
     }
 
-    const position = reviewRecord.positions[reviewIndex];
+    const position = gameHistory.positions[state.currentReviewIndex];
 
     if (!position || position.fen !== fen) {
       return;
@@ -1076,7 +1143,7 @@ $(document).ready(function () {
    * Resets the backend session and all local state, including review data.
    */
   $btnNewGame.on('click', async function () {
-    if (isEngineThinking) {
+    if (state.engineThinking) {
       return;
     }
 
@@ -1095,37 +1162,8 @@ $(document).ready(function () {
     } catch (error) {
       console.warn('Could not reset the backend session:', error);
     } finally {
-      cancelPendingAnalysis();
-
-      game.reset();
-      moveHistory = [];
-      gameHasEnded = false;
-      endReason = null;
-      reviewMode = false;
-      reviewIndex = 0;
-
-      reviewRecord.initialFen = game.fen();
-      reviewRecord.positions = [{ fen: game.fen() }];
-      reviewRecord.moves = [];
-      analysisCache.clear();
-
-      clearSelection();
-
-      if (board) {
-        board.start();
-      }
-
-      $reviewControls.attr('hidden', '');
-      $reviewAnalysisCard.attr('hidden', '');
-      $reviewAnalysisStatus.empty();
-
-      renderMoveHistory();
-      updateControlStates();
-
-      $statusBox.removeClass('thinking game-over');
+      resetGameState();
       $btnNewGame.prop('disabled', false);
-
-      updateStatus();
     }
   });
 
@@ -1134,11 +1172,11 @@ $(document).ready(function () {
    * Selection is cleared because square elements change position.
    */
   $btnFlipBoard.on('click', function () {
-    if (!board || isEngineThinking) {
+    if (!board || state.engineThinking) {
       return;
     }
 
-    clearSelection();
+    clearSelectionAndHighlights();
     board.flip();
   });
 
@@ -1147,7 +1185,7 @@ $(document).ready(function () {
    * chess.js considers it playable.
    */
   $btnResign.on('click', function () {
-    if (!isActiveGame() || isEngineThinking || reviewMode) {
+    if (!canHumanMove()) {
       return;
     }
 
@@ -1155,23 +1193,15 @@ $(document).ready(function () {
       return;
     }
 
-    gameHasEnded = true;
-    endReason = 'resignation';
-    clearSelection();
-
-    if (reviewRecord.moves.length === 0) {
-      // No positions beyond the start; keep the record valid anyway.
-    }
-
-    updateStatus();
+    finishGame('resignation');
   });
 
   $btnReviewGame.on('click', function () {
-    enterReviewMode();
+    enterReview(gameHistory.moves.length);
   });
 
   $btnReviewExit.on('click', function () {
-    exitReviewMode();
+    exitReview();
   });
 
   $btnReviewFirst.on('click', function () {
@@ -1179,23 +1209,23 @@ $(document).ready(function () {
   });
 
   $btnReviewPrev.on('click', function () {
-    showReviewPosition(reviewIndex - 1);
+    showReviewPosition(state.currentReviewIndex - 1);
   });
 
   $btnReviewNext.on('click', function () {
-    showReviewPosition(reviewIndex + 1);
+    showReviewPosition(state.currentReviewIndex + 1);
   });
 
   $btnReviewLast.on('click', function () {
-    showReviewPosition(reviewRecord.moves.length);
+    showReviewPosition(gameHistory.moves.length);
   });
 
   $btnReviewMovePrev.on('click', function () {
-    showReviewPosition(reviewIndex - 1);
+    showReviewPosition(state.currentReviewIndex - 1);
   });
 
   $btnReviewMoveNext.on('click', function () {
-    showReviewPosition(reviewIndex + 1);
+    showReviewPosition(state.currentReviewIndex + 1);
   });
 
   /**
@@ -1203,19 +1233,20 @@ $(document).ready(function () {
    * load. Click-to-move works with the display on or off.
    */
   $showLegalMoves.on('change', function () {
-    showLegalMovesPref = $(this).is(':checked');
+    state.showLegalMoves = $(this).is(':checked');
 
     try {
       window.localStorage.setItem(
         LEGAL_MOVES_STORAGE_KEY,
-        showLegalMovesPref ? 'true' : 'false'
+        state.showLegalMoves ? 'true' : 'false'
       );
     } catch (error) {
       // Ignore storage failures (private browsing etc.).
     }
 
-    if (selectedSquare) {
-      selectSquare(selectedSquare); // Re-render highlights for the current selection.
+    if (state.selectedSquare) {
+      clearSelectionAndHighlights();
+      renderSelection(); // Re-render highlights for the current selection.
     }
   });
 
@@ -1270,6 +1301,6 @@ $(document).ready(function () {
   });
 
   renderMoveHistory();
-  updateControlStates();
+  updateControls();
   updateStatus();
 });
