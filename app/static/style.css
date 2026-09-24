@@ -9,8 +9,6 @@
   --accent-hover: #0284c7;
   --success-color: #22c55e;
   --danger-color: #ef4444;
-  --eval-white: #ffffff;
-  --eval-black: #1e293b;
 }
 
 * {
@@ -70,45 +68,11 @@ header {
   align-items: flex-start;
 }
 
-/* Board & Eval Section */
+/* Board Section */
 .game-section {
   display: flex;
   gap: 1.25rem;
   align-items: stretch;
-}
-
-.eval-container {
-  width: 28px;
-  background: var(--eval-black);
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-}
-
-.eval-bar-white {
-  width: 100%;
-  height: 50%;
-  background: var(--eval-white);
-  transition: height 0.4s ease-out;
-  position: absolute;
-  bottom: 0;
-}
-
-.eval-label {
-  position: absolute;
-  top: 6px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #94a3b8;
-  z-index: 2;
-  user-select: none;
 }
 
 .board-wrapper {
@@ -249,6 +213,143 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Legal-move display and click selection (classes only, never inline styles) */
+.checkbox-group {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+.checkbox-group label {
+  color: var(--text-main);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.help-text {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+#board .square-55d63.sel-square {
+  box-shadow: inset 0 0 0 3px rgba(56, 189, 248, 0.85);
+}
+
+#board .square-55d63.legal-move-hint {
+  box-shadow: inset 0 0 0 9999px rgba(56, 189, 248, 0.28);
+}
+
+#board .square-55d63.legal-capture-hint {
+  box-shadow: inset 0 0 0 3px rgba(239, 68, 68, 0.85);
+  background-color: rgba(239, 68, 68, 0.25);
+}
+
+#board .square-55d63.legal-move-hint::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30%;
+  height: 30%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.65);
+  pointer-events: none;
+}
+
+#board .square-55d63.legal-move-hint,
+#board .square-55d63.legal-capture-hint {
+  cursor: pointer;
+}
+
+/* Review mode */
+.review-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.85rem;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: var(--accent-color);
+  font-size: 0.85rem;
+}
+
+.review-nav-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.review-nav-grid button {
+  padding: 0.55rem 0.4rem;
+}
+
+.review-nav-grid .review-nav-wide {
+  grid-column: span 2;
+}
+
+.review-position-indicator {
+  text-align: center;
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: var(--text-main);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  min-height: 2.3rem;
+}
+
+.review-analysis-status {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  min-height: 1.1rem;
+}
+
+.history-move-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+
+.history-move-btn:hover {
+  border-color: var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.history-move-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: var(--accent-color);
+}
+
+/* Visible keyboard focus for all interactive controls */
+button:focus-visible,
+select:focus-visible,
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 /* Move History */
 .history-container {
   height: 200px;
@@ -329,6 +430,16 @@ button:disabled {
   .sidebar {
     width: 100%;
     max-width: 480px;
+  }
+}
+
+@media (max-width: 480px) {
+  .review-nav-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .review-nav-grid .review-nav-wide {
+    grid-column: span 2;
   }
 }
 

@@ -28,12 +28,8 @@
   </header>
 
   <main class="main-container">
-    <!-- Left: Chessboard & Eval Bar -->
+    <!-- Left: Chessboard (analysis hidden during play) -->
     <div class="game-section">
-      <div class="eval-container" title="Evaluation Score">
-        <div id="evalLabel" class="eval-label">0.0</div>
-        <div id="evalBarWhite" class="eval-bar-white"></div>
-      </div>
       <div class="board-wrapper">
         <div id="board"></div>
       </div>
@@ -83,9 +79,87 @@
             <i class="fa-solid fa-repeat"></i> Flip Board
           </button>
         </div>
+
+        <div class="controls-grid">
+          <button id="btnResign">
+            <i class="fa-solid fa-flag"></i> Resign
+          </button>
+          <button id="btnReviewGame" disabled>
+            <i class="fa-solid fa-film"></i> Review Game
+          </button>
+        </div>
+
+        <div class="form-group checkbox-group">
+          <input type="checkbox" id="showLegalMoves" checked aria-describedby="showLegalMovesHelp">
+          <label for="showLegalMoves">Show legal moves</label>
+          <span id="showLegalMovesHelp" class="help-text">Highlights legal destinations when a piece is selected.</span>
+        </div>
       </div>
 
-      <!-- Move History Card -->
+      <!-- Game Navigation (Review mode) -->
+      <div class="card" id="reviewControls" hidden>
+        <div class="card-title">Game Review</div>
+        <div class="review-banner">
+          <i class="fa-solid fa-eye"></i>
+          <span>Review mode &mdash; the board is read-only.</span>
+        </div>
+        <div class="review-nav-grid">
+          <button id="btnReviewExit" class="btn-primary" aria-label="Exit review and return to the final position">
+            <i class="fa-solid fa-xmark"></i> Exit Review
+          </button>
+        </div>
+        <div class="review-nav-grid">
+          <button id="btnReviewFirst" aria-label="Jump to the starting position" title="First position">
+            <i class="fa-solid fa-backward-fast"></i>
+          </button>
+          <button id="btnReviewPrev" aria-label="Go to the previous position" title="Previous position">
+            <i class="fa-solid fa-backward-step"></i>
+          </button>
+          <button id="btnReviewNext" aria-label="Go to the next position" title="Next position">
+            <i class="fa-solid fa-forward-step"></i>
+          </button>
+          <button id="btnReviewLast" aria-label="Jump to the final position" title="Final position">
+            <i class="fa-solid fa-forward-fast"></i>
+          </button>
+        </div>
+        <div class="review-position-indicator">
+          <span id="reviewPositionLabel">Start</span>
+        </div>
+        <div class="review-nav-grid">
+          <button id="btnReviewMovePrev" aria-label="Go to the previous move" class="review-nav-wide">
+            <i class="fa-solid fa-chevron-left"></i> Prev Move
+          </button>
+          <button id="btnReviewMoveNext" aria-label="Go to the next move" class="review-nav-wide">
+            Next Move <i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Review Analysis -->
+      <div class="card" id="reviewAnalysisCard" hidden>
+        <div class="card-title">Post-game Analysis</div>
+        <div class="metrics-list">
+          <div class="metric-item">
+            <span>Move</span>
+            <span id="reviewSan" class="val">-</span>
+          </div>
+          <div class="metric-item">
+            <span>Evaluation (White POV)</span>
+            <span id="reviewEval" class="val">-</span>
+          </div>
+          <div class="metric-item">
+            <span>Search Depth</span>
+            <span id="reviewDepth" class="val">-</span>
+          </div>
+          <div class="metric-item">
+            <span>Opening Book</span>
+            <span id="reviewBook" class="val">-</span>
+          </div>
+        </div>
+        <div id="reviewAnalysisStatus" class="review-analysis-status" role="status" aria-live="polite"></div>
+      </div>
+
+      <!-- Move History -->
       <div class="card">
         <div class="card-title">
           <span>Move History</span>
@@ -104,25 +178,6 @@
               <!-- Dynamically populated -->
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <!-- Live Search Metrics -->
-      <div class="card">
-        <div class="card-title">Search Diagnostics</div>
-        <div class="metrics-list">
-          <div class="metric-item">
-            <span>Last Move Origin</span>
-            <span id="metricOrigin" class="val">-</span>
-          </div>
-          <div class="metric-item">
-            <span>Search Depth Reached</span>
-            <span id="metricDepth" class="val">-</span>
-          </div>
-          <div class="metric-item">
-            <span>Position Evaluation</span>
-            <span id="metricEval" class="val">0.00</span>
-          </div>
         </div>
       </div>
     </div>

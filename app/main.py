@@ -1,12 +1,13 @@
 """
 FastAPI Server for Chess Playing Bot
-Provides REST endpoints for bot moves, health checks, cache resets, and serves static files.
+Provides REST endpoints for bot moves, health checks, cache resets,
+post-game position analysis, and serves static files.
 """
 
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import chess
 from fastapi import FastAPI, HTTPException
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse
 
 from app.memory import TranspositionTable
 from app.book import OpeningBook
-from app.engine import ChessEngine
+from app.engine import ChessEngine, MATE_SCORE
 
 
 # Initialize singleton instances
@@ -58,6 +59,32 @@ class MoveRequest(BaseModel):
     fen: str = Field(..., description="Board position in Forsyth-Edwards Notation (FEN)")
     depth: int = Field(default=6, ge=1, le=10, description="Target search depth (1-10)")
     time_limit: Optional[float] = Field(default=2.0, ge=0.1, le=10.0, description="Maximum search time in seconds")
+
+
+class AnalyzeRequest(BaseModel):
+    """Request for post-game position analysis (used by review mode only)."""
+
+    fen: str = Field(..., description="Board position in FEN")
+    depth: int = Field(default=6, ge=1, le=10, description="Target search depth (1-10)")
+    time_limit: Optional[float] = Field(default=2.0, ge=0.1, le=10.0, description="Maximum search time in seconds")
+
+    @field_validator("fen")
+    @classmethod
+    def validate_fen(cls, value: str) -> str:
+        try:
+            chess.Board(value)
+        except ValueError as exc:
+            raise ValueError("Invalid FEN string provided.") from exc
+        return value
+
+
+class AnalyzeResponse(BaseModel):
+    """Analysis result. Scores are always from White's perspective."""
+
+    evaluation: int
+    depth: int
+    best_move: Optional[str] = None
+    from_book: bool = False
 
 
 class MoveResponse(BaseModel):
@@ -140,6 +167,80 @@ def calculate_move(request: MoveRequest):
         depth=depth_reached,
         is_game_over=False,
         result=None,
+    )
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+def analyze_position(request: AnalyzeRequest):
+    """
+    Post-game analysis for the review UI.
+
+    NOTE: this endpoint intentionally performs no server-side session or
+    "game has ended" check. The application keeps no server-side game state
+    that could prove a game ended, so gating analysis to finished games is a
+    frontend responsibility (review mode is only reachable after checkmate,
+    draw, or resignation). This is a frontend post-game feature, not a
+    restricted compute endpoint: request scope is bounded by the same
+    depth/time limits as /api/move.
+
+    Reuses the same engine search as /api/move; it does not duplicate it.
+    Scores are returned from White's perspective (positive favors White).
+    Terminal positions are reported explicitly and never fall through to a
+    normal search.
+    """
+    # Pydantic already validated the FEN (422 on structurally invalid input).
+    board = chess.Board(request.fen.strip())
+
+    if board.is_checkmate():
+        # The side to move has been checkmated. MATE_SCORE from the engine's
+        # perspective is returned for the mating side, so report from White's
+        # perspective explicitly: White delivered mate -> winning for White.
+        evaluation = MATE_SCORE if board.turn == chess.BLACK else -MATE_SCORE
+        return AnalyzeResponse(
+            evaluation=evaluation,
+            depth=0,
+            best_move=None,
+            from_book=False,
+        )
+
+    if board.is_game_over():
+        # Stalemate, insufficient material, 75-move rule, fivefold repetition.
+        return AnalyzeResponse(
+            evaluation=0,
+            depth=0,
+            best_move=None,
+            from_book=False,
+        )
+
+    book_move = opening_book.get_move(board)
+    if book_move:
+        return AnalyzeResponse(
+            evaluation=0,
+            depth=0,
+            best_move=book_move.uci(),
+            from_book=True,
+        )
+
+    best_move, eval_score, depth_reached = engine.find_best_move(
+        board,
+        target_depth=request.depth,
+        time_limit=request.time_limit or 2.0,
+    )
+
+    if not best_move:
+        # Defensive: no legal move but not detected as terminal above.
+        return AnalyzeResponse(
+            evaluation=0,
+            depth=0,
+            best_move=None,
+            from_book=False,
+        )
+
+    return AnalyzeResponse(
+        evaluation=eval_score,
+        depth=depth_reached,
+        best_move=best_move.uci(),
+        from_book=False,
     )
 
 
