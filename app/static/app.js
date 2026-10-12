@@ -91,9 +91,42 @@ $(document).ready(function () {
     showLegalMoves: true         // user preference (persisted)
   };
 
-  // Set while a drag-driven move is processed so the click handler ignores
-  // the mouseup/click event that browsers fire after a completed drag.
+  // Set when a drag actually travels to a DIFFERENT square so the click
+  // handler ignores the mouseup/click event browsers fire after a real drag.
+  // A click that mouses down and releases on the same square is a genuine
+  // click (selection / deselect), so it must NOT be suppressed.
   let suppressClickUntil = 0;
+
+  /**
+   * Marks the just-finished gesture as a real drag (mouseup on a square
+   * different from the mousedown square). Its trailing click is ignored.
+   */
+  function suppressNextClick() {
+    suppressClickUntil = Date.now() + 450;
+  }
+
+  // ------------------------------------------------------------------
+  // chessboard.js drag-avatar click interception
+  //
+  // chessboard.js v1.0.0 starts a drag on EVERY mousedown over an occupied
+  // square (no movement threshold). During the gesture it appends a
+  // floating avatar <img> to <body>, positioned under the cursor. For a
+  // plain click (no movement) that avatar intercepts the mouseup, so the
+  // browser retargets the resulting click event to <body> (the nearest
+  // common ancestor of the mousedown and mouseup targets) and it never
+  // reaches #board — silently killing click-to-move and selection.
+  //
+  // The avatar is purely visual: chessboard.js computes drop squares from
+  // pageX/pageY coordinates only and never hit-tests the avatar, so making
+  // it transparent to hit-testing restores the correct click target
+  // without affecting drag-and-drop. CSS animations (transform) do not
+  // participate in hit-testing, so no transition can reintroduce it.
+  // ------------------------------------------------------------------
+  const dragAvatarStyle = document.createElement('style');
+  dragAvatarStyle.id = 'drag-avatar-style';
+  dragAvatarStyle.textContent =
+    'body > img[data-piece] { pointer-events: none !important; }';
+  document.head.appendChild(dragAvatarStyle);
 
   // Legal-move display preference persistence.
   const LEGAL_MOVES_STORAGE_KEY = 'deepchess.showLegalMoves';
@@ -375,7 +408,12 @@ $(document).ready(function () {
    * Illegal moves must snap back.
    */
   function onDrop(source, target) {
-    suppressClickUntil = Date.now() + 450;
+    // A drop on a DIFFERENT square is a completed drag; its trailing click
+    // must be suppressed. A same-square drop is a plain click (select or
+    // deselect) and must stay enabled for the click handler.
+    if (source !== target) {
+      suppressNextClick();
+    }
 
     if (!canHumanMove()) {
       return 'snapback';
@@ -405,26 +443,21 @@ $(document).ready(function () {
 
   /**
    * Extracts a square name from a chessboard.js square element.
-   * Prefers the data-square attribute, then scans class tokens against a
-   * strict pattern, so class order is irrelevant.
+   * Resolves real click targets robustly from piece images, notation divs,
+   * and squares, so class order and target nesting are irrelevant.
    */
-  function extractSquare(element) {
-    if (!element || element.nodeType !== 1) {
+  function getSquareFromEvent(event) {
+    const target =
+      event.target instanceof Element
+        ? event.target.closest('[class*="square-"]')
+        : null;
+
+    if (!target || !boardElement.contains(target)) {
       return null;
     }
 
-    const attr = element.getAttribute('data-square');
-
-    if (attr && /^[a-h][1-8]$/.test(attr)) {
-      return attr;
-    }
-
-    const className =
-      typeof element.className === 'string' ? element.className : '';
-    const tokens = className.split(/\s+/);
-
-    for (let i = 0; i < tokens.length; i++) {
-      const match = /^square-([a-h][1-8])$/.exec(tokens[i]);
+    for (const className of target.classList) {
+      const match = /^square-([a-h][1-8])$/.exec(className);
 
       if (match) {
         return match[1];
@@ -440,23 +473,14 @@ $(document).ready(function () {
    * resolved with closest('.square-55d63').
    */
   function handleSquareClick(event) {
-    const squareEl =
-      event.target && event.target.closest
-        ? event.target.closest('.square-55d63')
-        : null;
-
-    if (!squareEl) {
-      return;
-    }
-
-    const square = extractSquare(squareEl);
+    const square = getSquareFromEvent(event);
 
     if (!square) {
       return;
     }
 
     if (Date.now() < suppressClickUntil) {
-      return; // Part of a drag gesture chessboard.js already handled.
+      return; // Trailing click of a completed drag gesture.
     }
 
     if (!canHumanMove()) {

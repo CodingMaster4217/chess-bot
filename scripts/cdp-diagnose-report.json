@@ -1,0 +1,227 @@
+{
+  "chromePort": 9222,
+  "boot": {
+    "squares": 64,
+    "e2HTML": "<div class=\"square-55d63 white-1e1d7 square-e2\" style=\"width:59px;height:59px;\" id=\"e2-3886-8e8b-92e5-ac3d-e6da-0886-8a70-aaaf\" data-square=\"e2\"><img src=\"/static/img/chesspieces/wikipedia/wP.png\" alt=\"\" class=\"piece-417db\" data-piece=\"wP\" style=\"width:59px;height:59px;\"></div>",
+    "clickListeners": [
+      {
+        "type": "click",
+        "target": "#board",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "document",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnNewGame",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnFlipBoard",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnResign",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewGame",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewExit",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewFirst",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewPrev",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewNext",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewLast",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewMovePrev",
+        "delegated": "other"
+      },
+      {
+        "type": "click",
+        "target": "#btnReviewMoveNext",
+        "delegated": "other"
+      }
+    ],
+    "mousedownListeners": [
+      {
+        "type": "mousedown",
+        "target": "body",
+        "delegated": "other"
+      },
+      {
+        "type": "mousedown",
+        "target": "DIV.board-b72b1",
+        "delegated": "other"
+      },
+      {
+        "type": "mousedown",
+        "target": "#board",
+        "delegated": "other"
+      }
+    ],
+    "jqueryBoardEvents": {
+      "click": 1,
+      "mousedown": 1
+    }
+  },
+  "interceptBefore": {
+    "topElement": "IMG.piece-417db",
+    "isSquareOrChild": true
+  },
+  "duringPress": {
+    "dragAvatarOnBody": [
+      {
+        "piece": "wP",
+        "display": "block",
+        "pos": "absolute"
+      }
+    ],
+    "topElementNow": "DIV.square-55d63 white-1e1d7 square-e2 highlight1-32417",
+    "e2ClassesNow": "square-55d63 white-1e1d7 square-e2 highlight1-32417",
+    "highlight1Applied": true
+  },
+  "realClickRecord": [
+    {
+      "isTrusted": true,
+      "targetDesc": "#e2-3886-8e8b-92e5-ac3d-e6da-0886-8a70-aaaf",
+      "closestSquare": "e2",
+      "boardInPath": true,
+      "pathLen": 12
+    }
+  ],
+  "afterRealClickE2": {
+    "item9_selectedSquare_effect": "e2 (sel-square present)",
+    "item10_e2Classes": "square-55d63 white-1e1d7 square-e2 sel-square",
+    "item10_e3Classes": "square-55d63 black-3c85d square-e3 legal-move-hint",
+    "item10_e4Classes": "square-55d63 white-1e1d7 square-e4 legal-move-hint",
+    "item10_hintSquares": [
+      "e4",
+      "e3"
+    ],
+    "item12_interceptAfter": "IMG.piece-417db",
+    "statusText": "White to move."
+  },
+  "gameStateProbes": {
+    "item6_canHumanMove_derivation": {
+      "engineThinking": false,
+      "gameFinished": false,
+      "reviewMode": false,
+      "turn": "w",
+      "gameOver": false,
+      "derivedResult": true
+    },
+    "item7_gameGet_e2": {
+      "type": "p",
+      "color": "w"
+    },
+    "item8_movesE2_verbose": [
+      {
+        "from": "e2",
+        "to": "e3",
+        "flags": "n",
+        "piece": "p"
+      },
+      {
+        "from": "e2",
+        "to": "e4",
+        "flags": "b",
+        "piece": "p"
+      }
+    ]
+  },
+  "syntheticClickContrast": {},
+  "highlightPseudoStyles": {
+    "e3HasHintClass": false,
+    "afterContent": "none",
+    "afterBackground": "rgba(0, 0, 0, 0)",
+    "afterPosition": "static",
+    "afterSize": "auto x auto",
+    "e3BoxShadow": "none",
+    "e3Position": "relative",
+    "e3Overflow": "visible"
+  },
+  "realClickE2thenE4": {
+    "e4HasPawn": true,
+    "e2HasPawn": false,
+    "clicksRecorded": [
+      {
+        "isTrusted": true,
+        "targetDesc": "#e2-3886-8e8b-92e5-ac3d-e6da-0886-8a70-aaaf",
+        "closestSquare": "e2",
+        "boardInPath": true,
+        "pathLen": 12
+      },
+      {
+        "isTrusted": false,
+        "targetDesc": "#e2-3886-8e8b-92e5-ac3d-e6da-0886-8a70-aaaf",
+        "closestSquare": "e2",
+        "boardInPath": true,
+        "pathLen": 12
+      },
+      {
+        "isTrusted": false,
+        "targetDesc": "BODY.",
+        "closestSquare": null,
+        "boardInPath": false,
+        "pathLen": 4
+      },
+      {
+        "isTrusted": true,
+        "targetDesc": "#e2-3886-8e8b-92e5-ac3d-e6da-0886-8a70-aaaf",
+        "closestSquare": "e2",
+        "boardInPath": true,
+        "pathLen": 12
+      },
+      {
+        "isTrusted": true,
+        "targetDesc": "#e4-aa0e-cb2b-0924-89f2-b7ae-b5bc-19b2-a407",
+        "closestSquare": "e4",
+        "boardInPath": true,
+        "pathLen": 12
+      }
+    ],
+    "statusText": "White to move."
+  },
+  "afterEngine": {
+    "statusText": "White to move.",
+    "historyRows": 1,
+    "apiRequests": [
+      "/api/move"
+    ]
+  },
+  "dragDropCheck": {
+    "d4HasPawn": true,
+    "d2HasPawn": false,
+    "statusText": "White to move."
+  },
+  "consoleMessages": [],
+  "failedRequests": []
+}

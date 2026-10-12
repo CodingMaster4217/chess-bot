@@ -1,0 +1,124 @@
+{
+  "chromePort": 9222,
+  "consoleMessages": [],
+  "failedRequests": [],
+  "init": {
+    "jquery": true,
+    "chess": true,
+    "chessboard": true,
+    "squares": 64,
+    "boardChildCount": 1,
+    "statusText": "White to move.",
+    "boardHTMLSnippet": "<div class=\"chessboard-63f37\"><div class=\"board-b72b1\" style=\"width: 472px;\"><div class=\"row-5277c\"><div class=\"square-5"
+  },
+  "handlers": {
+    "board": {
+      "click": 1,
+      "mousedown": 1
+    },
+    "document": {
+      "click": 1
+    },
+    "buttons": {
+      "btnNewGame": 1,
+      "btnFlipBoard": 1,
+      "btnResign": 1,
+      "btnReviewGame": 1,
+      "btnReviewExit": 1,
+      "btnReviewFirst": 1,
+      "btnReviewPrev": 1,
+      "btnReviewNext": 1,
+      "btnReviewLast": 1,
+      "btnReviewMovePrev": 1,
+      "btnReviewMoveNext": 1
+    }
+  },
+  "buttons": {
+    "btnNewGame": {
+      "disabled": false,
+      "display": "flex",
+      "pointerEvents": "auto"
+    },
+    "btnFlipBoard": {
+      "disabled": false,
+      "display": "flex",
+      "pointerEvents": "auto"
+    },
+    "btnResign": {
+      "disabled": false,
+      "display": "flex",
+      "pointerEvents": "auto"
+    },
+    "btnReviewGame": {
+      "disabled": true,
+      "display": "flex",
+      "pointerEvents": "auto"
+    },
+    "showLegalMoves": {
+      "checked": true,
+      "display": "block"
+    }
+  },
+  "hitTesting": {
+    "rect": {
+      "x": 369.5,
+      "y": 435,
+      "w": 59,
+      "h": 59
+    },
+    "topElementAtCenter": "IMG.piece-417db",
+    "topIsSquareOrChild": true,
+    "imgPresent": true,
+    "imgPosition": "static",
+    "imgOffsetParent": "square-55d63 white-1e1d7 square-e2",
+    "imgLeft": "auto",
+    "imgTop": "auto",
+    "squareOverflow": "visible",
+    "notationEl": false
+  },
+  "pieceGeometry": {
+    "imgRect": {
+      "w": 59,
+      "h": 59,
+      "x": 369.5,
+      "y": 435
+    },
+    "squareRect": {
+      "w": 59,
+      "h": 59
+    },
+    "imgNatural": {
+      "w": 80,
+      "h": 80
+    },
+    "imgComplete": true,
+    "imgCurrentSrc": "wP.png"
+  },
+  "clickToMove": {
+    "selAfter": "square-55d63 white-1e1d7 square-e2 sel-square",
+    "hints": [
+      "e4",
+      "e3"
+    ],
+    "e4PieceAfter": false,
+    "statusText": "Bot is calculating the best move..."
+  },
+  "afterEngineMove": {
+    "statusText": "White to move.",
+    "historyRows": 1
+  },
+  "resignFlow": {
+    "before": {
+      "disabled": false
+    },
+    "statusText": "Game Over: You resigned. Black wins.",
+    "reviewDisabled": false
+  },
+  "reviewFlow": {
+    "label": "Start",
+    "labelAfterPrev": "Start",
+    "reviewControlsHiddenAfterExit": true
+  },
+  "consoleMessagesFinal": [],
+  "failedRequestsFinal": []
+}

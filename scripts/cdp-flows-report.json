@@ -1,0 +1,88 @@
+{
+  "toggleOff": {
+    "selHasSelSquare": true,
+    "hintCountWhileOff": 0,
+    "movedWithoutHints": true,
+    "stored": "false"
+  },
+  "persistAfterReload": {
+    "checkboxChecked": true,
+    "stored": "true"
+  },
+  "clickFlow": {
+    "hints": [
+      "e3",
+      "e4"
+    ],
+    "afterIllegal": {
+      "e5HasPawn": false,
+      "selectionKept": true
+    },
+    "afterOutside": {
+      "selectionCleared": true
+    },
+    "e4HasPawn": true
+  },
+  "review": {
+    "status": "Game Over: You resigned. Black wins.",
+    "labelFinal": "1... e6  (ply 2/2)",
+    "nextDisabledAtEnd": true,
+    "prevDisabledAtEnd": false,
+    "labelPly1": "1. e4  (ply 1/2)",
+    "labelStart": "Start",
+    "firstDisabledAtStart": true,
+    "nextDisabledAtStart": false,
+    "labelBackToPly1": "1. e4  (ply 1/2)",
+    "labelBackFinal": "1... e6  (ply 2/2)",
+    "reviewHiddenAfterExit": true
+  },
+  "analysis": {
+    "ply1": {
+      "san": "e4",
+      "eval": "0.00",
+      "depth": "Book",
+      "status": ""
+    },
+    "finalPly": {
+      "eval": "0.00",
+      "depth": "Book",
+      "status": ""
+    },
+    "historyJump": "1. e4  (ply 1/2)",
+    "afterRapid": "0.00"
+  },
+  "mobileAfterResize": {
+    "squares": 64,
+    "selected": true,
+    "moved": true
+  },
+  "newGameResets": {
+    "reviewDisabledAgain": true,
+    "resignEnabled": true,
+    "reviewHidden": true,
+    "statusText": "White to move."
+  },
+  "consoleMessages": [],
+  "analysisRequests": [
+    {
+      "url": "/api/move",
+      "ts": 1790295006040
+    },
+    {
+      "url": "/api/move",
+      "ts": 1790295010653
+    },
+    {
+      "url": "/api/analyze",
+      "ts": 1790295013349
+    },
+    {
+      "url": "/api/reset",
+      "ts": 1790295019557
+    },
+    {
+      "url": "/api/move",
+      "ts": 1790295020218
+    }
+  ]
+}
