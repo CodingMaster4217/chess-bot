@@ -9,12 +9,16 @@ Run from the project root with the project venv:
 
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import chess
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as app_main
 from app.main import app
 
 
@@ -25,6 +29,15 @@ def client():
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 AFTER_E4_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"
+MIDDLEGAME_FEN = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 2 3"
+CASTLED_FEN = "r3k2r/pppq1ppp/2npbn2/2b1p3/2B1P3/2NPBN2/PPPQ1PPP/R3K2R w KQkq - 0 1"
+KIWIPETE_FEN = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
+
+# The engine honours its own deadline within +0.15 s (see tests/test_engine.py);
+# this allowance additionally covers HTTP/JSON overhead and thread-pool
+# scheduling (`def` endpoints run in a worker thread).
+API_TIME_TOLERANCE = 0.6
+CONCURRENT_API_TOLERANCE = 3.0
 
 
 class TestHealth:
@@ -169,3 +182,163 @@ class TestAnalyzeEndpoint:
         )
 
         assert response.status_code == 422
+
+
+class TestEnginePerRequest:
+    """P0-2: every request must search with its own engine state."""
+
+    def test_each_request_builds_its_own_engine_and_shares_the_tt(self, client, monkeypatch):
+        created = []
+        real_build_engine = app_main.build_engine
+
+        def spy_build_engine():
+            engine = real_build_engine()
+            created.append(engine)
+            return engine
+
+        monkeypatch.setattr(app_main, "build_engine", spy_build_engine)
+
+        move_response = client.post(
+            "/api/move", json={"fen": MIDDLEGAME_FEN, "depth": 3, "time_limit": 1.0}
+        )
+        analyze_response = client.post(
+            "/api/analyze", json={"fen": CASTLED_FEN, "depth": 3, "time_limit": 1.0}
+        )
+
+        assert move_response.status_code == 200
+        assert analyze_response.status_code == 200
+        # These positions are not in the book, so both endpoints really searched.
+        assert move_response.json()["from_book"] is False
+        assert analyze_response.json()["from_book"] is False
+
+        assert len(created) == 2, "endpoints did not build an engine per request"
+        assert created[0] is not created[1], "the same engine instance served two requests"
+
+        # The thread-safe transposition table is still shared.
+        assert created[0].tt is app_main.tt
+        assert created[1].tt is app_main.tt
+
+        # Each engine ran exactly one search, so their state cannot overlap.
+        assert created[0].nodes_visited > 0
+        assert created[1].nodes_visited > 0
+
+
+class TestMoveRequestTiming:
+    def test_move_respects_requested_time_limit(self, client):
+        for limit in (0.3, 1.0):
+            started = time.perf_counter()
+            response = client.post(
+                "/api/move",
+                json={"fen": MIDDLEGAME_FEN, "depth": 8, "time_limit": limit},
+            )
+            elapsed = time.perf_counter() - started
+            print(f"/api/move limit={limit}s elapsed={elapsed:.3f}s")
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["from_book"] is False
+            move = chess.Move.from_uci(body["move"])
+            assert move in chess.Board(MIDDLEGAME_FEN).legal_moves
+            assert elapsed <= limit + API_TIME_TOLERANCE, (
+                f"/api/move overran its {limit}s budget: {elapsed:.3f}s"
+            )
+
+
+class TestConcurrentMoveRequests:
+    def test_concurrent_moves_are_valid_and_independent(self):
+        requests = [
+            (MIDDLEGAME_FEN, 0.3, 4),
+            (CASTLED_FEN, 0.4, 5),
+            (KIWIPETE_FEN, 0.5, 4),
+            (AFTER_E4_FEN, 0.2, 3),
+        ]
+
+        def issue(fen, time_limit, depth):
+            # A separate client per thread; no context manager, so the app
+            # lifespan (and its TT flush) does not run during the test.
+            local_client = TestClient(app)
+            started = time.perf_counter()
+            response = local_client.post(
+                "/api/move",
+                json={"fen": fen, "depth": depth, "time_limit": time_limit},
+            )
+            return {
+                "fen": fen,
+                "time_limit": time_limit,
+                "elapsed": time.perf_counter() - started,
+                "response": response,
+            }
+
+        with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+            results = list(pool.map(lambda args: issue(*args), requests))
+
+        for result in results:
+            body = result["response"].json()
+            print(
+                f"concurrent /api/move limit={result['time_limit']}s "
+                f"elapsed={result['elapsed']:.3f}s depth={body.get('depth')} move={body.get('move')}"
+            )
+
+            assert result["response"].status_code == 200
+            assert body["is_game_over"] is False
+            assert body["from_book"] is False
+            move = chess.Move.from_uci(body["move"])
+            assert move in chess.Board(result["fen"]).legal_moves
+            assert result["elapsed"] <= result["time_limit"] + CONCURRENT_API_TOLERANCE, (
+                "a concurrent request ran far past its own budget, which points at "
+                "shared search state"
+            )
+
+
+class TestStaticFrontend:
+    """
+    Static-delivery guard for the frontend work that was unmerged until now.
+
+    ``fix/click-selection-and-hints`` (commit cade508) fixed click-to-move:
+    chessboard.js 1.0.0 starts a drag on every mousedown over a piece, and its
+    floating drag avatar swallowed the mouseup of a plain click, so the browser
+    retargeted the click to <body> and it never reached #board. The fix makes
+    that avatar transparent to hit-testing and stops suppressing clicks after a
+    same-square drop (a select/deselect, not a drag).
+
+    These are content guards on the served asset, not behavioural browser
+    tests: the repository's ``scripts/cdp-*.js`` harnesses cover behaviour and
+    need Chrome plus ``chrome-remote-interface``.
+    """
+
+    FRONTEND_ASSETS = [
+        "/",
+        "/static/app.js",
+        "/static/style.css",
+        "/static/vendor/jquery.min.js",
+        "/static/vendor/chess.min.js",
+        "/static/vendor/chessboard.min.js",
+        "/static/img/chesspieces/wikipedia/wP.png",
+    ]
+
+    def test_frontend_is_served(self, client):
+        for path in self.FRONTEND_ASSETS:
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert response.content, path
+
+        index = client.get("/")
+        assert 'id="board"' in index.text
+        assert index.headers["cache-control"] == "no-cache"
+
+        app_js = client.get("/static/app.js")
+        assert app_js.headers["cache-control"] == "no-cache"
+
+    def test_click_selection_fix_is_still_present(self, client):
+        app_js = client.get("/static/app.js").text
+
+        # The drag avatar must not intercept the click that follows a click.
+        assert "body > img[data-piece]" in app_js, "drag-avatar hit-testing rule lost"
+        assert "pointer-events: none" in app_js, "drag avatar intercepts clicks again"
+
+        # A same-square drop is a click (select/deselect), not a drag.
+        assert "if (source !== target)" in app_js, "same-square click suppression regressed"
+
+        # The square resolver must survive any click target inside a square.
+        assert "getSquareFromEvent" in app_js, "robust square resolver removed"
+        assert "[class*=\"square-\"]" in app_js, "square resolution relies on a fixed class again"

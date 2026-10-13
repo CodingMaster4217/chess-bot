@@ -109,6 +109,17 @@ PST_MAP = {
 INFINITY = 1000000
 MATE_SCORE = 900000
 
+# The search clock is polled every TIME_CHECK_INTERVAL nodes instead of at
+# every node: a bit-mask test on the node counter keeps the hottest path free
+# of clock reads while still bounding how late an expired deadline can be
+# noticed by the cost of the interval. Polling 128 nodes costs one
+# time.perf_counter() call per ~35-50 ms of search and keeps the worst-case
+# deadline overshoot well inside the 0.15 s budget even on the slowest
+# positions measured (~2.7k nodes/second), whereas 256 nodes already consumed
+# ~95 ms of that budget. Must be a power of two (mask polling).
+TIME_CHECK_INTERVAL = 128
+TIME_CHECK_MASK = TIME_CHECK_INTERVAL - 1
+
 
 def evaluate_board(board: chess.Board) -> int:
     """
@@ -194,18 +205,34 @@ class SearchTimeout(Exception):
 
 
 class ChessEngine:
+    """
+    Iterative-deepening alpha-beta search.
+
+    An instance owns the mutable state of a single search (nodes_visited,
+    start_time, time_limit), so one instance must never be shared by concurrent
+    searches: the searches would overwrite each other's deadline and node
+    counter. Instances are cheap (they only hold a reference to the shared
+    transposition table), so create one per request/thread and share only the
+    TranspositionTable, which guards its own state with a lock.
+
+    ``find_best_move`` always restores the caller's board to the position it
+    was given, including when the search times out or raises.
+    """
+
     def __init__(self, tt: Optional[TranspositionTable] = None):
         self.tt = tt or TranspositionTable()
         self.nodes_visited = 0
         self.start_time = 0.0
         self.time_limit = 2.0
-        self.stop_search = False
 
     def _check_time(self):
-        """Raises SearchTimeout if time budget is consumed."""
-        if (self.nodes_visited & 2047) == 0:
-            if time.time() - self.start_time > self.time_limit:
-                self.stop_search = True
+        """
+        Raises SearchTimeout once the hard deadline (start_time + time_limit)
+        has passed. The deadline itself is a plain wall-clock comparison; the
+        node mask only decides how often it is evaluated.
+        """
+        if (self.nodes_visited & TIME_CHECK_MASK) == 0:
+            if time.perf_counter() - self.start_time > self.time_limit:
                 raise SearchTimeout()
 
     def quiescence_search(self, board: chess.Board, alpha: int, beta: int, depth: int = 0, max_q_depth: int = 8) -> int:
@@ -242,8 +269,12 @@ class ChessEngine:
 
         for move in ordered_captures:
             board.push(move)
-            score = -self.quiescence_search(board, -beta, -alpha, depth + 1, max_q_depth)
-            board.pop()
+            try:
+                score = -self.quiescence_search(board, -beta, -alpha, depth + 1, max_q_depth)
+            finally:
+                # Undo on every path, including SearchTimeout and any other
+                # exception, so the caller's board is never left mutated.
+                board.pop()
 
             if score >= beta:
                 return beta
@@ -293,8 +324,12 @@ class ChessEngine:
 
         for move in ordered_moves:
             board.push(move)
-            score = -self.alpha_beta(board, depth - 1, -beta, -alpha, ply + 1)
-            board.pop()
+            try:
+                score = -self.alpha_beta(board, depth - 1, -beta, -alpha, ply + 1)
+            finally:
+                # See quiescence_search: every pushed move is popped exactly
+                # once, even while a SearchTimeout unwinds the recursion.
+                board.pop()
 
             if score > best_score:
                 best_score = score
@@ -328,35 +363,44 @@ class ChessEngine:
         Iterative Deepening Search.
         Searches progressively from depth 1 to target_depth within the given time_limit.
         Returns: (best_move, best_score_from_side_to_move_perspective, depth_completed)
+
+        The board is always left exactly as it was passed in, and the returned
+        move is always legal in that position (or None when the position has no
+        legal moves).
         """
         self.nodes_visited = 0
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.time_limit = time_limit
-        self.stop_search = False
 
         legal_moves = list(board.legal_moves)
         if not legal_moves:
             return None, 0, 0
 
+        # Safe fallback until a root move has actually been scored: the first
+        # legal move is legal by construction.
         best_move_overall = legal_moves[0]
         best_score_overall = 0
         completed_depth = 0
 
         # Iterative Deepening loop
         for depth in range(1, target_depth + 1):
-            try:
-                alpha = -INFINITY
-                beta = INFINITY
-                depth_best_move = None
-                depth_best_score = -INFINITY
+            alpha = -INFINITY
+            beta = INFINITY
+            depth_best_move = None
+            depth_best_score = -INFINITY
 
+            try:
                 # Order moves at root based on previous best move
                 ordered_moves = order_moves(board, legal_moves, best_move_overall)
 
                 for move in ordered_moves:
                     board.push(move)
-                    score = -self.alpha_beta(board, depth - 1, -beta, -alpha, ply=1)
-                    board.pop()
+                    try:
+                        score = -self.alpha_beta(board, depth - 1, -beta, -alpha, ply=1)
+                    finally:
+                        # Popped exactly once even when the search times out
+                        # mid-move, so the board keeps its original position.
+                        board.pop()
 
                     if score > depth_best_score:
                         depth_best_score = score
@@ -375,7 +419,13 @@ class ChessEngine:
                     break
 
             except SearchTimeout:
-                # Time limit expired: discard incomplete iteration and break
+                # Deadline reached: the partial iteration is not usable as a
+                # result. If no iteration has completed yet but at least one
+                # root move was fully scored before the deadline, prefer that
+                # move over the arbitrary first legal move.
+                if completed_depth == 0 and depth_best_move is not None:
+                    best_move_overall = depth_best_move
+                    best_score_overall = depth_best_score
                 break
 
         # Return score converted from white's perspective for frontend display convenience

@@ -20,10 +20,22 @@ from app.book import OpeningBook
 from app.engine import ChessEngine, MATE_SCORE
 
 
-# Initialize singleton instances
+# Shared, long-lived singletons.
+#
+# The transposition table is shared on purpose: it guards its in-memory state
+# with a lock and opens a SQLite connection per flush, so concurrent searches
+# can use one table safely. The engine must NOT be shared, because ChessEngine
+# keeps mutable per-search state (nodes_visited, start_time, time_limit) and
+# concurrent requests would overwrite each other's deadline and node counter.
+# build_engine() gives every request its own cheap engine instance; only the
+# transposition table is passed along.
 tt = TranspositionTable()
 opening_book = OpeningBook()
-engine = ChessEngine(tt=tt)
+
+
+def build_engine() -> ChessEngine:
+    """Returns a fresh engine for a single search, backed by the shared TT."""
+    return ChessEngine(tt=tt)
 
 
 @asynccontextmanager
@@ -143,6 +155,8 @@ def calculate_move(request: MoveRequest):
         )
 
     # 2. Iterative Deepening Minimax Alpha-Beta Engine Search
+    # One engine per request: the search state must not be shared (see build_engine).
+    engine = build_engine()
     best_move, eval_score, depth_reached = engine.find_best_move(
         board,
         target_depth=request.depth,
@@ -221,6 +235,8 @@ def analyze_position(request: AnalyzeRequest):
             from_book=True,
         )
 
+    # One engine per request: the search state must not be shared (see build_engine).
+    engine = build_engine()
     best_move, eval_score, depth_reached = engine.find_best_move(
         board,
         target_depth=request.depth,
