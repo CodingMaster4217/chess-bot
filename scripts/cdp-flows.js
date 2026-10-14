@@ -120,13 +120,62 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   await sleep(2500); // engine reply -> 2 plies
 
-  // --- Scenario D: resign -> review navigation with 2 plies + analysis ------
+  // --- Scenario D: checkmate -> game-ended screen ----------------------------
+  // Review is only offered for a game that ended on the board (a resigned game
+  // hides the action), so the bot's replies are scripted in-page. window.fetch
+  // is resolved per call, so replacing it here affects every later request
+  // without a reload; anything the script does not cover falls back to the real
+  // server.
+  log.checkmateEnd = await evalJs(`(async () => {
+    const realFetch = window.fetch.bind(window);
+    const script = ['e5', 'Qh4#'];
+
+    window.fetch = async (url, options) => {
+      if (!String(url).includes('/api/move')) return realFetch(url, options);
+      const san = script.shift();
+      if (!san) return realFetch(url, options);
+      const board = new window.Chess(JSON.parse(options.body).fen);
+      const move = board.move(san);
+      if (!move) return realFetch(url, options);
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          move: move.from + move.to + (move.promotion || ''),
+          from_book: false, eval: 0, depth: 3, is_game_over: false, result: null
+        })
+      };
+    };
+
+    const fire = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    const play = async (from, to) => {
+      fire(document.querySelector('#board .square-' + from));
+      await new Promise(r => setTimeout(r, 60));
+      fire(document.querySelector('#board .square-' + to));
+      await new Promise(r => setTimeout(r, 900));
+    };
+
+    document.getElementById('btnNewGame').click();
+    await new Promise(r => setTimeout(r, 500));
+    await play('f2', 'f3');
+    await play('g2', 'g4');
+    await new Promise(r => setTimeout(r, 500));
+
+    return {
+      plies: document.querySelectorAll('#historyBody tr').length,
+      gameOverShown: !document.getElementById('gameOverOverlay').hidden,
+      title: document.getElementById('gameOverTitle').textContent,
+      result: document.getElementById('gameOverResult').textContent,
+      detail: document.getElementById('gameOverDetail').textContent,
+      statusText: document.getElementById('statusText').textContent,
+      reviewActionVisible: !document.getElementById('btnGameOverReview').hidden
+    };
+  })()`, true);
+
+  // --- Scenario D2: review navigation from the game-ended screen -------------
   log.review = await evalJs(`(async () => {
-    window.confirm = () => true;
-    document.getElementById('btnResign').click();
-    await new Promise(r => setTimeout(r, 120));
     const status = document.getElementById('statusText').textContent;
-    document.getElementById('btnReviewGame').click();
+    // Review mode is entered from the game-ended screen.
+    document.getElementById('btnGameOverReview').click();
     await new Promise(r => setTimeout(r, 150));
     const labelFinal = document.getElementById('reviewPositionLabel').textContent;
     const nextDisabledAtEnd = document.getElementById('btnReviewNext').disabled;
@@ -153,13 +202,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       status, labelFinal, nextDisabledAtEnd, prevDisabledAtEnd,
       labelPly1, labelStart, firstDisabledAtStart, nextDisabledAtStart,
       labelBackToPly1, labelBackFinal,
-      reviewHiddenAfterExit: document.getElementById('reviewControls').hidden
+      reviewHiddenAfterExit: document.getElementById('reviewControls').hidden,
+      gameOverShownAfterExit: !document.getElementById('gameOverOverlay').hidden
     };
   })()`, true);
 
   // re-enter review; analysis: ply1 position has stored engine data; final ply triggers /api/analyze
   log.analysis = await evalJs(`(async () => {
-    document.getElementById('btnReviewGame').click();
+    // Exiting review restored the game-ended screen; re-enter review from it.
+    document.getElementById('btnGameOverReview').click();
     await new Promise(r => setTimeout(r, 200));
     document.getElementById('btnReviewFirst').click();
     await new Promise(r => setTimeout(r, 100));
@@ -217,11 +268,54 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // --- Scenario F: New Game clears review state -----------------------------
   log.newGameResets = await evalJs(`({
-    reviewDisabledAgain: document.getElementById('btnReviewGame').disabled,
+    gameOverHiddenAfterNewGame: document.getElementById('gameOverOverlay').hidden,
+    resignConfirmationHidden: document.getElementById('resignOverlay').hidden,
     resignEnabled: !document.getElementById('btnResign').disabled,
     reviewHidden: document.getElementById('reviewControls').hidden,
     statusText: document.getElementById('statusText').textContent
   })`);
+
+  // --- Scenario G: a resigned game does not offer review --------------------
+  log.resignationEnd = await evalJs(`(async () => {
+    await new Promise(r => setTimeout(r, 3000)); // let any in-flight engine search finish
+    const resignBtn = document.getElementById('btnResign');
+    const resignEnabled = !resignBtn.disabled;
+
+    resignBtn.click();
+    await new Promise(r => setTimeout(r, 150));
+    const confirmShown = !document.getElementById('resignOverlay').hidden;
+
+    document.getElementById('btnResignCancel').click();
+    await new Promise(r => setTimeout(r, 150));
+    const cancelLeavesGameRunning =
+      document.getElementById('resignOverlay').hidden &&
+      document.getElementById('statusText').textContent.indexOf('Game Over') !== 0;
+
+    resignBtn.click();
+    await new Promise(r => setTimeout(r, 150));
+    document.getElementById('btnResignConfirm').click();
+    await new Promise(r => setTimeout(r, 300));
+
+    const reviewBtn = document.getElementById('btnGameOverReview');
+    const reviewAction = {
+      hidden: reviewBtn.hidden,
+      disabled: reviewBtn.disabled,
+      display: getComputedStyle(reviewBtn).display
+    };
+
+    reviewBtn.click(); // must be inert
+    await new Promise(r => setTimeout(r, 150));
+
+    return {
+      resignEnabled, confirmShown, cancelLeavesGameRunning, reviewAction,
+      gameOverShown: !document.getElementById('gameOverOverlay').hidden,
+      title: document.getElementById('gameOverTitle').textContent,
+      result: document.getElementById('gameOverResult').textContent,
+      statusText: document.getElementById('statusText').textContent,
+      reviewStayedClosed: document.getElementById('reviewControls').hidden,
+      newGameActionVisible: !document.getElementById('btnGameOverNew').hidden
+    };
+  })()`, true);
 
   log.consoleMessages = consoleMessages;
   log.analysisRequests = requests;

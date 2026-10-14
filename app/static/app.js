@@ -11,6 +11,9 @@
  *   so re-initialization can never create duplicate handlers.
  * - Live engine analysis is never rendered during an active game; engine
  *   data is stored for post-game review only.
+ * - Game endings are surfaced by two in-app overlays instead of native
+ *   dialogs: the game-ended screen (finishGame -> showGameOverModal) and the
+ *   resign confirmation ($btnResign -> openResignModal).
  */
 
 $(document).ready(function () {
@@ -59,7 +62,17 @@ $(document).ready(function () {
   const $btnNewGame = $('#btnNewGame');
   const $btnFlipBoard = $('#btnFlipBoard');
   const $btnResign = $('#btnResign');
-  const $btnReviewGame = $('#btnReviewGame');
+  const $btnResignConfirm = $('#btnResignConfirm');
+  const $btnResignCancel = $('#btnResignCancel');
+  const $resignOverlay = $('#resignOverlay');
+  const $gameOverOverlay = $('#gameOverOverlay');
+  const $gameOverIcon = $('#gameOverIcon');
+  const $gameOverTitle = $('#gameOverTitle');
+  const $gameOverResult = $('#gameOverResult');
+  const $gameOverCode = $('#gameOverCode');
+  const $gameOverDetail = $('#gameOverDetail');
+  const $btnGameOverReview = $('#btnGameOverReview');
+  const $btnGameOverNew = $('#btnGameOverNew');
   const $btnReviewExit = $('#btnReviewExit');
   const $btnReviewFirst = $('#btnReviewFirst');
   const $btnReviewPrev = $('#btnReviewPrev');
@@ -85,6 +98,7 @@ $(document).ready(function () {
     engineThinking: false,       // an /api/move request is in flight
     gameFinished: false,         // application-level result (includes resignation)
     finishReason: null,          // 'checkmate' | 'draw' | 'resignation' | null
+    serverResult: null,          // '1-0' | '0-1' | '1/2-1/2' when the backend reported the ending
     reviewMode: false,           // read-only review navigation active
     currentReviewIndex: 0,       // 0 = start position, N = after ply N
     selectedSquare: null,        // click-to-move selection
@@ -194,18 +208,26 @@ $(document).ready(function () {
   /**
    * Records an application-level game result. chess.js cannot know about
    * resignations, so this is the single authority for "game over".
+   *
+   * `options.result` is the optional result code reported by the backend
+   * ('1-0', '0-1', '1/2-1/2'); it is only used to label endings chess.js
+   * cannot classify itself.
    */
-  function finishGame(reason) {
+  function finishGame(reason, options) {
     if (state.gameFinished) {
       return;
     }
 
+    const details = options || {};
+
     state.gameFinished = true;
     state.finishReason = reason;
+    state.serverResult = details.result || null;
 
     clearSelectionAndHighlights();
     updateStatus();
     updateControls();
+    showGameOverModal();
   }
 
   /**
@@ -222,6 +244,296 @@ $(document).ready(function () {
       finishGame('draw');
     }
   }
+
+  // ------------------------------------------------------------------
+  // Game-ending description (single source of truth)
+  //
+  // Both the sidebar status box and the game-ended modal render from this
+  // description, so the termination reason can never disagree between them.
+  // chess.js is the authority for the ending; the optional result code the
+  // backend returned is used to label endings chess.js cannot classify
+  // itself (seventy-five-move rule / fivefold repetition).
+  // ------------------------------------------------------------------
+
+  const RESULT_CODE_LABELS = {
+    '1-0': 'White wins',
+    '0-1': 'Black wins',
+    '1/2-1/2': 'Draw'
+  };
+
+  function describeResultCode(code) {
+    return (code && RESULT_CODE_LABELS[code]) || null;
+  }
+
+  /**
+   * Halfmove clock (5th FEN field). chess.js only exposes the fifty-move rule
+   * through in_draw(), so the clock is read directly to tell that draw apart
+   * from stalemate, repetition, and insufficient material.
+   */
+  function halfmoveClock() {
+    const fields = game.fen().split(' ');
+    const clock = parseInt(fields[4], 10);
+
+    return Number.isFinite(clock) ? clock : 0;
+  }
+
+  /**
+   * Returns { title, result, code, detail, statusLine, icon, tone } for the
+   * finished game. Only called once state.gameFinished is true.
+   */
+  function getGameEndDetails() {
+    if (state.finishReason === 'resignation') {
+      return {
+        title: 'You resigned',
+        result: 'Black wins',
+        code: state.serverResult,
+        detail: 'You resigned the game, so Black is declared the winner. The position on the board is no longer playable.',
+        statusLine: 'You resigned \u2014 Black wins.',
+        icon: 'fa-solid fa-flag',
+        tone: 'resigned'
+      };
+    }
+
+    if (game.in_checkmate()) {
+      // The side to move is the side that has been checkmated.
+      const mated = game.turn() === 'w' ? 'White' : 'Black';
+      const winner = mated === 'White' ? 'Black' : 'White';
+
+      return {
+        title: 'Checkmate',
+        result: `${winner} wins`,
+        code: state.serverResult,
+        detail: `Checkmate: ${mated} is in check and has no legal move left. ${winner} wins the game.`,
+        statusLine: `Checkmate \u2014 ${winner} wins.`,
+        icon: 'fa-solid fa-chess-king',
+        tone: 'checkmate'
+      };
+    }
+
+    if (game.in_stalemate()) {
+      return {
+        title: 'Stalemate',
+        result: 'Draw',
+        code: state.serverResult,
+        detail: 'Draw by stalemate: no legal moves remain and the side to move is not in check.',
+        statusLine: 'Stalemate \u2014 the position is a draw.',
+        icon: 'fa-solid fa-handshake',
+        tone: 'draw'
+      };
+    }
+
+    if (game.insufficient_material()) {
+      return {
+        title: 'Draw',
+        result: 'Draw',
+        code: state.serverResult,
+        detail: 'Draw by insufficient material: neither side has enough material left to deliver checkmate.',
+        statusLine: 'Draw by insufficient material.',
+        icon: 'fa-solid fa-handshake',
+        tone: 'draw'
+      };
+    }
+
+    if (game.in_threefold_repetition()) {
+      return {
+        title: 'Draw',
+        result: 'Draw',
+        code: state.serverResult,
+        detail: 'Draw by threefold repetition: the same position has occurred three times.',
+        statusLine: 'Draw by threefold repetition.',
+        icon: 'fa-solid fa-handshake',
+        tone: 'draw'
+      };
+    }
+
+    if (halfmoveClock() >= 100) {
+      return {
+        title: 'Draw',
+        result: 'Draw',
+        code: state.serverResult,
+        detail: 'Draw by the fifty-move rule: 50 moves passed without a pawn move or a capture.',
+        statusLine: 'Draw by the fifty-move rule.',
+        icon: 'fa-solid fa-handshake',
+        tone: 'draw'
+      };
+    }
+
+    // The backend ended the game on a rule this chess.js build does not model
+    // (seventy-five-move rule / fivefold repetition); its result code is the
+    // only precise information available.
+    return {
+      title: 'Game Over',
+      result: describeResultCode(state.serverResult) || 'Game over',
+      code: state.serverResult,
+      detail: 'The game is over by rule: the position is terminal, so no further moves can be played from it.',
+      statusLine: 'the game is over by rule.',
+      icon: 'fa-solid fa-flag-checkered',
+      tone: 'draw'
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // Modal overlays (game-ended screen + resign confirmation)
+  //
+  // Both overlays are plain DOM (no native alert/confirm), keyboard
+  // reachable: opening one moves focus inside it, Tab is trapped between its
+  // controls, and closing restores focus to the control that opened it.
+  // ------------------------------------------------------------------
+
+  const FOCUSABLE_SELECTOR =
+    'button:not([disabled]), [href], input:not([disabled]), ' +
+    'select:not([disabled]), textarea:not([disabled]), ' +
+    '[tabindex]:not([tabindex="-1"])';
+
+  let modalRestoreFocus = null;
+
+  function isModalOpen($overlay) {
+    return $overlay.attr('data-open') === 'true';
+  }
+
+  function anyModalOpen() {
+    return $('.modal-overlay[data-open]').length > 0;
+  }
+
+  function openModal($overlay, $initialFocus) {
+    modalRestoreFocus = document.activeElement;
+
+    $overlay.removeAttr('hidden');
+    $overlay.attr('data-open', 'true');
+    document.body.classList.add('modal-open');
+
+    const $focusTarget =
+      $initialFocus && $initialFocus.length
+        ? $initialFocus
+        : $overlay.find(FOCUSABLE_SELECTOR).first();
+
+    $focusTarget.trigger('focus');
+  }
+
+  /**
+   * Hides the overlay. Focus returns to the element that opened it when
+   * `restoreFocus` is true (the game-ended overlay has no trigger element).
+   */
+  function closeModal($overlay, restoreFocus) {
+    $overlay.attr('hidden', '');
+    $overlay.removeAttr('data-open');
+
+    if (!anyModalOpen()) {
+      document.body.classList.remove('modal-open');
+    }
+
+    if (restoreFocus && modalRestoreFocus && document.contains(modalRestoreFocus)) {
+      modalRestoreFocus.focus();
+    }
+
+    modalRestoreFocus = null;
+  }
+
+  /**
+   * Keeps Tab focus cycling inside the open dialog.
+   */
+  function trapModalFocus(event, $overlay) {
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    const $focusable = $overlay.find(FOCUSABLE_SELECTOR).filter(':visible');
+
+    if ($focusable.length === 0) {
+      return;
+    }
+
+    const first = $focusable.get(0);
+    const last = $focusable.get($focusable.length - 1);
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  /**
+   * Renders and shows the game-ended screen. Called exactly once per game by
+   * finishGame(); exitReview() restores it after a review session.
+   */
+  function showGameOverModal() {
+    const details = getGameEndDetails();
+
+    // Icon markup is built from internal constants only (never user input).
+    $gameOverIcon.attr('class', `modal-icon modal-icon-${details.tone}`);
+    $gameOverIcon.html(`<i class="${details.icon}" aria-hidden="true"></i>`);
+
+    $gameOverTitle.text(details.title);
+    $gameOverResult.text(details.result);
+
+    if (details.code) {
+      $gameOverCode.text(details.code).removeAttr('hidden');
+    } else {
+      $gameOverCode.text('').attr('hidden', '');
+    }
+
+    $gameOverDetail.text(details.detail);
+
+    // Review is offered only for a game that reached its end on the board:
+    // a resigned game has no continuation to step through, and a game with no
+    // recorded move has nothing to review. Either way the button is removed
+    // from the screen (not merely disabled) so the ending offers New Game only.
+    const reviewPossible =
+      state.finishReason !== 'resignation' && gameHistory.moves.length > 0;
+
+    $btnGameOverReview.prop('disabled', !reviewPossible);
+
+    if (reviewPossible) {
+      $btnGameOverReview.removeAttr('hidden');
+    } else {
+      $btnGameOverReview.attr('hidden', '');
+    }
+
+    openModal(
+      $gameOverOverlay,
+      $btnGameOverReview.prop('disabled') ? $btnGameOverNew : $btnGameOverReview
+    );
+  }
+
+  function closeGameOverModal() {
+    closeModal($gameOverOverlay, false);
+  }
+
+  function openResignModal() {
+    openModal($resignOverlay, $btnResignConfirm);
+  }
+
+  function closeResignModal() {
+    closeModal($resignOverlay, true);
+  }
+
+  function cancelResign() {
+    closeResignModal();
+  }
+
+  /**
+   * Escaping the resign confirmation cancels it. The game-ended screen has no
+   * dismiss action: the player must either review the game or start a new one.
+   */
+  $(document).on('keydown.modals', function (event) {
+    if (isModalOpen($resignOverlay)) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelResign();
+        return;
+      }
+
+      trapModalFocus(event, $resignOverlay);
+      return;
+    }
+
+    if (isModalOpen($gameOverOverlay)) {
+      trapModalFocus(event, $gameOverOverlay);
+    }
+  });
 
   /**
    * Enters review mode at the given index. The completed chess.js game is
@@ -265,6 +577,13 @@ $(document).ready(function () {
     renderMoveHistory();
     updateStatus();
     updateControls();
+
+    // The game-ended screen is the only way back into review, so it is
+    // restored when the review session ends (the board is still the final
+    // completed position, never a new playable game).
+    if (state.gameFinished) {
+      showGameOverModal();
+    }
   }
 
   /**
@@ -278,6 +597,7 @@ $(document).ready(function () {
 
     state.gameFinished = false;
     state.finishReason = null;
+    state.serverResult = null;
     state.reviewMode = false;
     state.currentReviewIndex = 0;
     state.selectedSquare = null;
@@ -290,6 +610,9 @@ $(document).ready(function () {
     if (board) {
       board.start();
     }
+
+    closeGameOverModal();
+    closeResignModal();
 
     $reviewControls.attr('hidden', '');
     $reviewAnalysisCard.attr('hidden', '');
@@ -314,7 +637,6 @@ $(document).ready(function () {
     $btnNewGame.prop('disabled', state.engineThinking);
     $btnFlipBoard.prop('disabled', state.engineThinking);
     $btnResign.prop('disabled', !canMove);
-    $btnReviewGame.prop('disabled', !state.gameFinished || state.reviewMode);
 
     $btnReviewFirst.prop('disabled', !inReview || atStart);
     $btnReviewPrev.prop('disabled', !inReview || atStart);
@@ -685,8 +1007,22 @@ $(document).ready(function () {
 
       const data = await response.json();
 
+      if (state.gameFinished) {
+        // The user resigned (or the game otherwise ended) while this request
+        // was in flight; the reply must not be applied to a finished game.
+        return;
+      }
+
       if (data.is_game_over) {
         syncFinishFromBoard();
+
+        // python-chess also ends the game on the seventy-five-move rule and
+        // fivefold repetition, which this chess.js build does not model. Trust
+        // the server's verdict (and use its result code) in that case.
+        if (!state.gameFinished) {
+          finishGame('draw', { result: data.result });
+        }
+
         updateStatus();
         return;
       }
@@ -768,14 +1104,18 @@ $(document).ready(function () {
 
   /**
    * Displays the current game state. No engine analysis is ever shown here.
+   * Finished games are described by getGameEndDetails(), the same source the
+   * game-ended screen renders from.
    */
   function updateStatus() {
     if (state.engineThinking) {
       return;
     }
 
-    if (state.gameFinished && state.finishReason === 'resignation') {
-      $statusText.text('Game Over: You resigned. Black wins.');
+    if (state.gameFinished) {
+      const details = getGameEndDetails();
+
+      $statusText.text(`Game Over: ${details.statusLine}`);
       $statusBox.addClass('game-over');
       return;
     }
@@ -783,23 +1123,13 @@ $(document).ready(function () {
     const moveColor = game.turn() === 'w' ? 'White' : 'Black';
     let status;
 
-    if (game.in_checkmate()) {
-      status = `Game Over: ${moveColor} is checkmated.`;
-      $statusBox.addClass('game-over');
-    } else if (game.in_draw()) {
-      status =
-        'Game Over: Draw by stalemate, repetition, insufficient material, or the 50-move rule.';
-      $statusBox.addClass('game-over');
+    if (game.in_check()) {
+      status = `${moveColor} to move. Check!`;
     } else {
       status = `${moveColor} to move.`;
-
-      if (game.in_check()) {
-        status += ' Check!';
-      }
-
-      $statusBox.removeClass('game-over');
     }
 
+    $statusBox.removeClass('game-over');
     $statusText.text(status);
   }
 
@@ -1205,23 +1535,47 @@ $(document).ready(function () {
   });
 
   /**
-   * Resigns after explicit confirmation. Ends the local game even though
-   * chess.js considers it playable.
+   * Opens the in-app resign confirmation. The game only ends after the
+   * confirmation is accepted ($btnResignConfirm); declining leaves the game
+   * untouched. Replaces the previous native browser confirmation dialog.
    */
   $btnResign.on('click', function () {
     if (!canHumanMove()) {
       return;
     }
 
-    if (!window.confirm('Are you sure you want to resign this game?')) {
-      return;
-    }
+    openResignModal();
+  });
 
+  $btnResignCancel.on('click', function () {
+    cancelResign();
+  });
+
+  /**
+   * Confirms the resignation: the game ends immediately, the game-ended
+   * screen takes over, and Black is declared the winner.
+   */
+  $btnResignConfirm.on('click', function () {
+    closeResignModal();
     finishGame('resignation');
   });
 
-  $btnReviewGame.on('click', function () {
+  /**
+   * Game-ended screen actions. "Review Game" is the only entry point into
+   * review mode now that the sidebar button is gone.
+   */
+  $btnGameOverReview.on('click', function () {
+    if ($btnGameOverReview.prop('disabled')) {
+      return;
+    }
+
+    closeGameOverModal();
     enterReview(gameHistory.moves.length);
+  });
+
+  $btnGameOverNew.on('click', function () {
+    closeGameOverModal();
+    $btnNewGame.trigger('click');
   });
 
   $btnReviewExit.on('click', function () {

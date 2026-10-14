@@ -80,12 +80,9 @@
           </button>
         </div>
 
-        <div class="controls-grid">
+        <div class="controls-grid controls-grid-full">
           <button id="btnResign">
             <i class="fa-solid fa-flag"></i> Resign
-          </button>
-          <button id="btnReviewGame" disabled>
-            <i class="fa-solid fa-film"></i> Review Game
           </button>
         </div>
 
@@ -182,6 +179,72 @@
       </div>
     </div>
   </main>
+
+  <!--
+    Game-ended screen. Shown automatically by the app as soon as a game
+    concludes (checkmate, resignation, or any draw). All text is filled in by
+    app.js from the precise termination reason; nothing here is hard-coded to a
+    single outcome.
+
+    This overlay is deliberately not dismissible: the actions inside it are the
+    only states the app can continue from, and "Review Game" is the single entry
+    point into review mode (the sidebar button was removed). A game that ended by
+    resignation hides "Review Game", leaving "New Game" as the only action.
+  -->
+  <div id="gameOverOverlay" class="modal-overlay" hidden>
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gameOverTitle"
+      aria-describedby="gameOverDetail"
+    >
+      <div id="gameOverIcon" class="modal-icon" aria-hidden="true">
+        <i class="fa-solid fa-chess-king"></i>
+      </div>
+      <h2 id="gameOverTitle" class="modal-title">Game Over</h2>
+      <div id="gameOverResult" class="modal-result">-</div>
+      <div id="gameOverCode" class="modal-code" hidden></div>
+      <p id="gameOverDetail" class="modal-detail">-</p>
+      <div class="modal-actions">
+        <button id="btnGameOverReview" class="btn-primary">
+          <i class="fa-solid fa-film"></i> Review Game
+        </button>
+        <button id="btnGameOverNew">
+          <i class="fa-solid fa-rotate-right"></i> New Game
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    Resign confirmation screen. Replaces the native browser confirmation
+    dialog, which is blocking, unstyled, and not reliably keyboard-accessible.
+  -->
+  <div id="resignOverlay" class="modal-overlay" hidden>
+    <div
+      class="modal modal-confirm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="resignTitle"
+      aria-describedby="resignDetail"
+    >
+      <div class="modal-icon modal-icon-warning" aria-hidden="true">
+        <i class="fa-solid fa-flag"></i>
+      </div>
+      <h2 id="resignTitle" class="modal-title">Resign this game?</h2>
+      <p id="resignDetail" class="modal-detail">
+        You concede immediately and Black is declared the winner. This cannot
+        be undone.
+      </p>
+      <div class="modal-actions">
+        <button id="btnResignConfirm" class="btn-danger">
+          <i class="fa-solid fa-flag"></i> Resign
+        </button>
+        <button id="btnResignCancel">Keep playing</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Scripts: Vendor dependencies bundled locally for 100% reliability -->
   <script src="/static/vendor/jquery.min.js"></script>

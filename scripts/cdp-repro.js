@@ -111,7 +111,7 @@ async function findChromePort(start) {
         return ev.length;
       };
       out.buttons = {};
-      ['btnNewGame','btnFlipBoard','btnResign','btnReviewGame','btnReviewExit','btnReviewFirst','btnReviewPrev','btnReviewNext','btnReviewLast','btnReviewMovePrev','btnReviewMoveNext'].forEach(id => out.buttons[id] = clickCount(id));
+      ['btnNewGame','btnFlipBoard','btnResign','btnResignConfirm','btnResignCancel','btnGameOverReview','btnGameOverNew','btnReviewExit','btnReviewFirst','btnReviewPrev','btnReviewNext','btnReviewLast','btnReviewMovePrev','btnReviewMoveNext'].forEach(id => out.buttons[id] = clickCount(id));
       return out;
     })()`,
     returnByValue: true,
@@ -122,7 +122,7 @@ async function findChromePort(start) {
   const btns = await Runtime.evaluate({
     expression: `(() => {
       const o = {};
-      ['btnNewGame','btnFlipBoard','btnResign','btnReviewGame'].forEach(id => {
+      ['btnNewGame','btnFlipBoard','btnResign','btnResignConfirm','btnGameOverReview'].forEach(id => {
         const b = document.getElementById(id);
         o[id] = b ? { disabled: b.disabled, display: getComputedStyle(b).display, pointerEvents: getComputedStyle(b).pointerEvents } : 'missing';
       });
@@ -215,42 +215,67 @@ async function findChromePort(start) {
   });
   L('afterEngineMove', afterMove.result.value);
 
-  // ---- 8. Resign flow --------------------------------------------------------
-  // Override confirm BEFORE clicking.
-  await Runtime.evaluate({ expression: `window.confirm = () => true;` });
+  // ---- 8. Resign flow (in-app confirmation screen, no native dialog) -------
   await Runtime.evaluate({ expression: `document.getElementById('btnNewGame').click();` });
   await sleep(600);
   const resignState = await Runtime.evaluate({
     expression: `(async () => {
       const b = document.getElementById('btnResign');
       const before = { disabled: b.disabled };
+      const overlay = document.getElementById('resignOverlay');
       b.click();
       await new Promise(r => setTimeout(r, 150));
-      return { before, statusText: document.getElementById('statusText').textContent,
-               reviewDisabled: document.getElementById('btnReviewGame').disabled };
+      const confirmState = {
+        promptShown: !overlay.hidden,
+        gameOverHidden: document.getElementById('gameOverOverlay').hidden,
+        statusText: document.getElementById('statusText').textContent
+      };
+      document.getElementById('btnResignCancel').click();
+      await new Promise(r => setTimeout(r, 120));
+      const cancelled = overlay.hidden;
+      b.click();
+      await new Promise(r => setTimeout(r, 120));
+      document.getElementById('btnResignConfirm').click();
+      await new Promise(r => setTimeout(r, 200));
+      const gameOver = document.getElementById('gameOverOverlay');
+      return {
+        before, confirmState, cancelled,
+        statusText: document.getElementById('statusText').textContent,
+        gameOverShown: !gameOver.hidden,
+        gameOverTitle: document.getElementById('gameOverTitle').textContent,
+        gameOverResult: document.getElementById('gameOverResult').textContent,
+        gameOverDetail: document.getElementById('gameOverDetail').textContent
+      };
     })()`,
     returnByValue: true,
     awaitPromise: true,
   });
   L('resignFlow', resignState.result.value);
 
-  // ---- 9. Review flow --------------------------------------------------------
+  // ---- 9. A resigned game offers no review ----------------------------------
+  // Review is only offered for a game that ended on the board, so this checks
+  // the action is gone (and inert) instead of driving review navigation.
   const reviewState = await Runtime.evaluate({
     expression: `(async () => {
-      document.getElementById('btnReviewGame').click();
-      await new Promise(r => setTimeout(r, 200));
-      const label = document.getElementById('reviewPositionLabel').textContent;
-      document.getElementById('btnReviewPrev').click();
-      await new Promise(r => setTimeout(r, 120));
-      const labelAfterPrev = document.getElementById('reviewPositionLabel').textContent;
-      document.getElementById('btnReviewExit').click();
-      await new Promise(r => setTimeout(r, 120));
-      return { label, labelAfterPrev, reviewControlsHiddenAfterExit: document.getElementById('reviewControls').hidden };
+      const reviewBtn = document.getElementById('btnGameOverReview');
+      const reviewAction = {
+        hidden: reviewBtn.hidden,
+        disabled: reviewBtn.disabled,
+        display: getComputedStyle(reviewBtn).display
+      };
+      reviewBtn.click();
+      await new Promise(r => setTimeout(r, 150));
+      return {
+        reviewAction,
+        reviewControlsHidden: document.getElementById('reviewControls').hidden,
+        gameOverStillShown: !document.getElementById('gameOverOverlay').hidden,
+        newGameVisible: !document.getElementById('btnGameOverNew').hidden
+      };
     })()`,
     returnByValue: true,
     awaitPromise: true,
   });
-  L('reviewFlow', reviewState.result.value);
+  L('reviewAfterResignation', reviewState.result.value);
 
   L('consoleMessagesFinal', consoleMessages.slice());
   L('failedRequestsFinal', failedRequests.slice());

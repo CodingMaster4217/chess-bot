@@ -328,7 +328,6 @@ class TestStaticFrontend:
 
         app_js = client.get("/static/app.js")
         assert app_js.headers["cache-control"] == "no-cache"
-
     def test_click_selection_fix_is_still_present(self, client):
         app_js = client.get("/static/app.js").text
 
@@ -342,3 +341,122 @@ class TestStaticFrontend:
         # The square resolver must survive any click target inside a square.
         assert "getSquareFromEvent" in app_js, "robust square resolver removed"
         assert "[class*=\"square-\"]" in app_js, "square resolution relies on a fixed class again"
+
+
+class TestGameEndUi:
+    """
+    Guards for the game-ended screen and the resign confirmation screen.
+
+    ``scripts/dom-flows.js`` drives these flows in a jsdom document (real
+    clicks, real chess.js); these static guards keep the wiring present in the
+    served assets so a regression cannot pass silently when jsdom is not
+    installed. They are content checks, not behavioural ones.
+    """
+
+    def test_review_game_button_is_removed(self, client):
+        index = client.get("/").text
+        app_js = client.get("/static/app.js").text
+
+        assert "btnReviewGame" not in index, "the sidebar Review Game button is back"
+        assert "btnReviewGame" not in app_js, "orphaned Review Game wiring remains"
+
+    def test_game_ended_screen_markup_is_present(self, client):
+        index = client.get("/").text
+
+        for element_id in (
+            "gameOverOverlay",
+            "gameOverResult",
+            "gameOverCode",
+            "gameOverDetail",
+            "btnGameOverReview",
+            "btnGameOverNew",
+        ):
+            assert f'id="{element_id}"' in index, f"missing game-ended element {element_id}"
+
+        assert index.count('role="dialog"') >= 2, "overlays must be dialogs"
+        assert index.count('aria-modal="true"') >= 2, "overlays must be modal"
+        assert 'aria-labelledby="gameOverTitle"' in index
+        assert 'aria-describedby="gameOverDetail"' in index
+
+    def test_resign_confirmation_markup_is_present(self, client):
+        index = client.get("/").text
+
+        for element_id in ("resignOverlay", "btnResignConfirm", "btnResignCancel"):
+            assert f'id="{element_id}"' in index, f"missing resign element {element_id}"
+
+        # Native dialogs must not be used for resigning any more.
+        assert "window.confirm" not in index
+
+    def test_no_native_dialogs_in_application_script(self, client):
+        app_js = client.get("/static/app.js").text
+
+        assert "confirm(" not in app_js, "native confirmation dialog is back"
+        assert "alert(" not in app_js, "native alert is back"
+
+    def test_every_termination_reason_is_described(self, client):
+        app_js = client.get("/static/app.js").text
+
+        # One description per documented ending, and a single source of truth
+        # shared by the status box and the game-ended screen.
+        assert "function getGameEndDetails" in app_js
+        assert "function showGameOverModal" in app_js
+        assert "function openResignModal" in app_js
+
+        assert "in_checkmate()" in app_js
+        assert "in_stalemate()" in app_js
+        assert "insufficient_material()" in app_js
+        assert "in_threefold_repetition()" in app_js
+        assert "halfmoveClock() >= 100" in app_js, "fifty-move rule is no longer detected"
+        assert "state.finishReason === 'resignation'" in app_js
+
+        for phrase in (
+            "Checkmate: ",
+            "Draw by stalemate: no legal moves remain",
+            "Draw by insufficient material",
+            "Draw by threefold repetition",
+            "Draw by the fifty-move rule",
+        ):
+            assert phrase in app_js, f"missing termination detail: {phrase}"
+
+    def test_game_ended_screen_owns_review_entry(self, client):
+        app_js = client.get("/static/app.js").text
+
+        # Review mode is still reachable, now from the game-ended screen.
+        assert "$btnGameOverReview.on('click'" in app_js
+        assert "enterReview(gameHistory.moves.length)" in app_js
+        assert "showGameOverModal();" in app_js, "finishGame must open the game-ended screen"
+
+    def test_resigned_games_do_not_offer_review(self, client):
+        app_js = client.get("/static/app.js").text
+        css = client.get("/static/style.css").text
+
+        # A resigned game must not offer review: the game-ended screen drops the
+        # action instead of merely leaving it disabled.
+        assert "state.finishReason !== 'resignation'" in app_js, (
+            "resigned games can be reviewed again"
+        )
+        assert "$btnGameOverReview.attr('hidden', '')" in app_js, (
+            "the Review Game action is no longer removed after a resignation"
+        )
+        assert ".modal-actions [hidden]" in css, (
+            "a hidden modal action would still render (button display rule wins)"
+        )
+
+    def test_server_reported_endings_are_honoured(self, client):
+        app_js = client.get("/static/app.js").text
+
+        # python-chess ends games chess.js cannot classify (75-move rule /
+        # fivefold repetition); the backend result code must still be used.
+        assert "finishGame('draw', { result: data.result })" in app_js
+        assert "describeResultCode" in app_js
+
+    def test_modal_styles_are_shipped(self, client):
+        css = client.get("/static/style.css").text
+
+        assert ".modal-overlay {" in css
+        assert ".modal-overlay[hidden]" in css, "hidden overlays would stay visible"
+        assert ".modal {" in css
+        assert ".modal-actions {" in css
+        assert "button.btn-danger" in css
+        assert "body.modal-open" in css, "the page would scroll behind the overlay"
+        assert "align-items: flex-end" in css, "no mobile layout for the modals"
